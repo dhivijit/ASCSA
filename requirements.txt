@@ -1,1 +1,7 @@
 # requirements.txt for secops-core
+neo4j>=5.0
+pyyaml
+regex
+gitpython
+pytest
+python-dotenv
