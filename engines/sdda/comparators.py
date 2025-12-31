@@ -148,6 +148,46 @@ def compare_environment(current_env: str,
         details=details
     )
 
+def compare_branches(current_branch: str, 
+                     baseline: Baseline, 
+                     threshold: float = 3.0) -> DriftScore:
+    """Detect drift in branch usage patterns"""
+    is_new_branch = current_branch not in baseline.normal_branches
+    
+    # Check for suspicious branch patterns
+    is_suspicious = any([
+        current_branch.lower().startswith('temp'),
+        current_branch.lower().startswith('test'),
+        current_branch.lower().startswith('hack'),
+        current_branch.lower().startswith('bypass')
+    ])
+    
+    # Z-score (simplified for branches)
+    z_score = 0.0
+    if is_new_branch:
+        z_score = threshold + 1.5 if is_suspicious else threshold + 0.3
+    
+    is_anomaly = is_new_branch
+    
+    details = ""
+    if is_suspicious and is_new_branch:
+        details = f"SUSPICIOUS: Secret accessed from unusual branch '{current_branch}' (known: {', '.join(list(baseline.normal_branches)[:3])})"
+    elif is_new_branch:
+        details = f"New branch detected: '{current_branch}' (known: {', '.join(list(baseline.normal_branches)[:3])})"
+    else:
+        details = f"Expected branch: '{current_branch}'"
+    
+    return DriftScore(
+        feature_name="branch",
+        z_score=z_score,
+        is_anomaly=is_anomaly,
+        threshold=threshold,
+        current_value=1.0 if is_new_branch else 0.0,
+        baseline_mean=baseline.branch_mean,
+        baseline_std=baseline.branch_std,
+        details=details
+    )
+
 def calculate_severity(drift_scores: List[DriftScore]) -> str:
     """Calculate overall severity based on individual drift scores"""
     if not drift_scores:

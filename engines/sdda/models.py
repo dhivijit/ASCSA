@@ -46,6 +46,10 @@ class BehavioralFeatures:
     environments: Set[str] = field(default_factory=set)
     environment_frequency: Dict[str, int] = field(default_factory=dict)
     
+    # Branch features
+    branches: Set[str] = field(default_factory=set)
+    branch_frequency: Dict[str, int] = field(default_factory=dict)
+    
     # Temporal features
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
@@ -76,6 +80,11 @@ class Baseline:
     env_mean: float = 0.0
     env_std: float = 0.0
     
+    # Branch baseline
+    normal_branches: Set[str] = field(default_factory=set)
+    branch_mean: float = 0.0
+    branch_std: float = 0.0
+    
     # Metadata
     sample_count: int = 0
     created_at: datetime = field(default_factory=datetime.now)
@@ -105,6 +114,7 @@ class DriftDetection:
     frequency_drift: Optional[DriftScore] = None
     actor_drift: Optional[DriftScore] = None
     environment_drift: Optional[DriftScore] = None
+    branch_drift: Optional[DriftScore] = None
     
     # Overall drift
     total_drift_score: float = 0.0

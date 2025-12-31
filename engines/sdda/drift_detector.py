@@ -7,6 +7,7 @@ from .comparators import (
     compare_frequency,
     compare_actors,
     compare_environment,
+    compare_branches,
     calculate_severity
 )
 from .baseline_manager import BaselineManager
@@ -65,6 +66,14 @@ class DriftDetector:
         )
         drift_scores.append(environment_drift)
         
+        # 5. Branch drift
+        branch_drift = compare_branches(
+            secret_usage.branch,
+            baseline,
+            self.zscore_threshold
+        )
+        drift_scores.append(branch_drift)
+        
         # Calculate overall drift
         total_drift_score = sum(score.z_score for score in drift_scores)
         severity = calculate_severity(drift_scores)
@@ -86,6 +95,7 @@ class DriftDetector:
             frequency_drift=frequency_drift,
             actor_drift=actor_drift,
             environment_drift=environment_drift,
+            branch_drift=branch_drift,
             total_drift_score=total_drift_score,
             severity=severity,
             is_drifted=is_drifted,
@@ -149,6 +159,19 @@ class DriftDetector:
                     recommendations.append(
                         "Secret accessed in new environment. "
                         "Verify this is intentional and environment-specific secrets are in use."
+                    )
+            
+            elif score.feature_name == "branch":
+                if "SUSPICIOUS" in score.details.upper():
+                    recommendations.append(
+                        "ALERT: Secret accessed from suspicious branch. "
+                        "Investigate immediately. Review commit history and actor permissions. "
+                        "Consider rotating secret if unauthorized access is confirmed."
+                    )
+                else:
+                    recommendations.append(
+                        "Secret accessed from new branch. "
+                        "Verify this is part of expected workflow and not a security bypass."
                     )
         
         if not recommendations:

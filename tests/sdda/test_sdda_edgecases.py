@@ -348,16 +348,14 @@ class TestSpecialCharactersAndStrings(unittest.TestCase):
     
     def test_special_characters_in_secret_id(self):
         """Test secret IDs with special characters"""
-        special_ids = [
+        # Valid characters (should work)
+        valid_ids = [
             "SECRET-WITH-DASHES",
             "secret.with.dots",
             "secret_with_underscores",
-            "SECRET@SYMBOL",
-            "secret/with/slashes",
-            "秘密",  # Unicode
         ]
         
-        for secret_id in special_ids:
+        for secret_id in valid_ids:
             usage = SecretUsage(
                 secret_id=secret_id,
                 run_id="run-1",
@@ -376,6 +374,29 @@ class TestSpecialCharactersAndStrings(unittest.TestCase):
             usages = self.db.get_historical_usage(secret_id, 30)
             self.assertEqual(len(usages), 1)
             self.assertEqual(usages[0].secret_id, secret_id)
+        
+        # Invalid characters (should be rejected by validation)
+        invalid_ids = [
+            "SECRET@SYMBOL",  # @ not allowed
+            "secret/with/slashes",  # / not allowed
+            "秘密",  # Unicode not in allowed pattern
+        ]
+        
+        for secret_id in invalid_ids:
+            usage = SecretUsage(
+                secret_id=secret_id,
+                run_id="run-2",
+                timestamp=datetime.now(),
+                stages={"build"},
+                access_count=1,
+                actor="bot",
+                environment="dev",
+                branch="main"
+            )
+            
+            # Should raise validation error
+            with self.assertRaises(ValueError):
+                self.db.store_secret_usage(usage)
     
     def test_empty_string_actor(self):
         """Test handling of empty string actor"""
@@ -396,9 +417,9 @@ class TestSpecialCharactersAndStrings(unittest.TestCase):
         self.assertEqual(usages[0].actor, "")
     
     def test_very_long_strings(self):
-        """Test handling of very long strings"""
-        long_id = "SECRET_" + "X" * 1000
-        long_actor = "actor@" + "x" * 500 + ".com"
+        """Test handling of very long strings - validation should reject them"""
+        long_id = "SECRET_" + "X" * 1000  # Over 255 char limit
+        long_actor = "actor@" + "x" * 500 + ".com"  # Over 255 char limit
         
         usage = SecretUsage(
             secret_id=long_id,
@@ -411,8 +432,25 @@ class TestSpecialCharactersAndStrings(unittest.TestCase):
             branch="main"
         )
         
-        self.db.store_secret_usage(usage)
-        usages = self.db.get_historical_usage(long_id, 30)
+        # Should raise validation error for excessively long secret_id
+        with self.assertRaises(ValueError):
+            self.db.store_secret_usage(usage)
+        
+        # Test with valid-length strings
+        valid_usage = SecretUsage(
+            secret_id="SECRET_VALIDLENGTH",
+            run_id="run-2",
+            timestamp=datetime.now(),
+            stages={"build"},
+            access_count=1,
+            actor="valid-actor",
+            environment="dev",
+            branch="main"
+        )
+        
+        # Should work fine
+        self.db.store_secret_usage(valid_usage)
+        usages = self.db.get_historical_usage("SECRET_VALIDLENGTH", 30)
         self.assertEqual(len(usages), 1)
 
 class TestTimeEdgeCases(unittest.TestCase):

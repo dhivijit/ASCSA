@@ -42,6 +42,14 @@ class BaselineManager:
             all_envs.add(usage.environment)
             env_freq[usage.environment] = env_freq.get(usage.environment, 0) + 1
         
+        # Aggregate branches
+        all_branches = set()
+        branch_freq = {}
+        for usage in usages:
+            if usage.branch:  # Only count non-empty branches
+                all_branches.add(usage.branch)
+                branch_freq[usage.branch] = branch_freq.get(usage.branch, 0) + 1
+        
         # Calculate access statistics
         total_accesses = sum(usage.access_count for usage in usages)
         avg_accesses = total_accesses / len(usages) if usages else 0.0
@@ -61,6 +69,8 @@ class BaselineManager:
             actor_frequency=actor_freq,
             environments=all_envs,
             environment_frequency=env_freq,
+            branches=all_branches,
+            branch_frequency=branch_freq,
             first_seen=first_seen,
             last_seen=last_seen,
             total_runs=len(usages)
@@ -98,6 +108,11 @@ class BaselineManager:
         env_mean = statistics.mean(env_counts) if env_counts else 0.0
         env_std = statistics.stdev(env_counts) if len(env_counts) > 1 else 0.0
         
+        # Branch statistics
+        branch_counts = list(features.branch_frequency.values())
+        branch_mean = statistics.mean(branch_counts) if branch_counts else 0.0
+        branch_std = statistics.stdev(branch_counts) if len(branch_counts) > 1 else 0.0
+        
         baseline = Baseline(
             secret_id=secret_id,
             window_days=self.window_days,
@@ -112,6 +127,9 @@ class BaselineManager:
             normal_environments=features.environments,
             env_mean=env_mean,
             env_std=env_std,
+            normal_branches=features.branches,
+            branch_mean=branch_mean,
+            branch_std=branch_std,
             sample_count=len(usages),
             created_at=datetime.now(),
             updated_at=datetime.now()
