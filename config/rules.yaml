@@ -1,0 +1,303 @@
+# Security Rules Configuration for HCRS
+# Users can customize these rules based on their requirements
+
+# Python Security Rules
+python_rules:
+  # Hardcoded Secrets
+  - rule_id: PY-SEC-001
+    name: Hardcoded Password
+    violation_type: hardcoded_secret
+    severity: CRITICAL
+    pattern_type: regex
+    pattern: "(?i)(password|passwd|pwd|secret|token|api_key|access_key)\\s*=\\s*[\"'][^\"']{8,}[\"']"
+    message: "Hardcoded password or secret detected"
+    description: "Credentials should never be hardcoded in source code"
+    cwe_id: "CWE-798"
+    recommendation: "Use environment variables or a secure secrets management system"
+    weight: 100
+    enabled: true
+    confidence: 0.9
+  
+  - rule_id: PY-SEC-002
+    name: AWS Access Key
+    violation_type: hardcoded_secret
+    severity: CRITICAL
+    pattern_type: regex
+    pattern: 'AKIA[0-9A-Z]{16}'
+    message: "AWS Access Key detected"
+    description: "AWS credentials should not be committed to source code"
+    cwe_id: "CWE-798"
+    recommendation: "Use AWS IAM roles or AWS Secrets Manager"
+    weight: 100
+    enabled: true
+    confidence: 1.0
+  
+  # Command Injection
+  - rule_id: PY-SEC-010
+    name: OS Command Injection
+    violation_type: command_injection
+    severity: CRITICAL
+    pattern_type: ast
+    pattern: "os.system|os.popen|subprocess.call|subprocess.run|subprocess.Popen"
+    message: "Potential command injection vulnerability"
+    description: "User input passed to system commands without sanitization"
+    cwe_id: "CWE-78"
+    recommendation: "Use subprocess with shell=False and pass arguments as list. Validate and sanitize all inputs"
+    weight: 90
+    enabled: true
+    confidence: 0.8
+  
+  - rule_id: PY-SEC-011
+    name: Shell Command with String Concatenation
+    violation_type: command_injection
+    severity: CRITICAL
+    pattern_type: ast
+    pattern: "shell=True"
+    message: "Shell command execution with shell=True is dangerous"
+    description: "Using shell=True with untrusted input can lead to command injection"
+    cwe_id: "CWE-78"
+    recommendation: "Use shell=False and pass command as a list of arguments"
+    weight: 85
+    enabled: true
+    confidence: 0.9
+  
+  # SQL Injection
+  - rule_id: PY-SEC-020
+    name: SQL String Formatting
+    violation_type: sql_injection
+    severity: HIGH
+    pattern_type: ast
+    pattern: "execute.*%|execute.*format|execute.*f\""
+    message: "Potential SQL injection via string formatting"
+    description: "SQL queries constructed using string formatting are vulnerable to injection"
+    cwe_id: "CWE-89"
+    recommendation: "Use parameterized queries or prepared statements"
+    weight: 85
+    enabled: true
+    confidence: 0.8
+  
+  # Unsafe Deserialization
+  - rule_id: PY-SEC-030
+    name: Pickle Deserialization
+    violation_type: unsafe_deserialization
+    severity: HIGH
+    pattern_type: ast
+    pattern: "pickle.loads|pickle.load|yaml.load"
+    message: "Unsafe deserialization detected"
+    description: "Deserializing untrusted data can lead to remote code execution"
+    cwe_id: "CWE-502"
+    recommendation: "Use yaml.safe_load() instead of yaml.load() or avoid deserializing untrusted data"
+    weight: 90
+    enabled: true
+    confidence: 0.9
+  
+  # Weak Cryptography
+  - rule_id: PY-SEC-040
+    name: Weak Hash Algorithm
+    violation_type: weak_crypto
+    severity: MEDIUM
+    pattern_type: ast
+    pattern: "hashlib.md5|hashlib.sha1"
+    message: "Weak cryptographic hash algorithm"
+    description: "MD5 and SHA1 are cryptographically broken"
+    cwe_id: "CWE-327"
+    recommendation: "Use SHA-256 or stronger hash functions"
+    weight: 70
+    enabled: true
+    confidence: 1.0
+  
+  - rule_id: PY-SEC-041
+    name: Insecure Random
+    violation_type: insecure_random
+    severity: MEDIUM
+    pattern_type: ast
+    pattern: "random.random|random.randint|random.choice"
+    message: "Insecure random number generation"
+    description: "random module is not cryptographically secure"
+    cwe_id: "CWE-330"
+    recommendation: "Use secrets module for security-sensitive operations"
+    weight: 50
+    enabled: true
+    confidence: 0.7
+  
+  # Sensitive Data Logging
+  - rule_id: PY-SEC-050
+    name: Password in Log
+    violation_type: sensitive_logging
+    severity: HIGH
+    pattern_type: regex
+    pattern: '(?i)(print|logging\.|logger\.).*\b(password|token|secret|key)\b'
+    message: "Potential sensitive data exposure in logs"
+    description: "Logging passwords or secrets can expose them in log files"
+    cwe_id: "CWE-532"
+    recommendation: "Never log sensitive credentials. Mask or exclude them from logs"
+    weight: 60
+    enabled: true
+    confidence: 0.8
+  
+  # Eval Usage
+  - rule_id: PY-SEC-060
+    name: Dangerous Eval
+    violation_type: eval_usage
+    severity: CRITICAL
+    pattern_type: ast
+    pattern: "eval|exec|compile"
+    message: "Use of eval/exec is dangerous"
+    description: "eval() and exec() can execute arbitrary code"
+    cwe_id: "CWE-94"
+    recommendation: "Avoid eval/exec. Use safer alternatives like ast.literal_eval for limited cases"
+    weight: 85
+    enabled: true
+    confidence: 0.9
+  
+  # Path Traversal
+  - rule_id: PY-SEC-070
+    name: Path Traversal
+    violation_type: path_traversal
+    severity: HIGH
+    pattern_type: ast
+    pattern: "open.*\\.\\."
+    message: "Potential path traversal vulnerability"
+    description: "User-controlled paths with '..' can access unauthorized files"
+    cwe_id: "CWE-22"
+    recommendation: "Validate and sanitize file paths. Use os.path.abspath and check against allowed directories"
+    weight: 80
+    enabled: true
+    confidence: 0.7
+
+# JavaScript Security Rules
+javascript_rules:
+  # Hardcoded Secrets
+  - rule_id: JS-SEC-001
+    name: Hardcoded API Key
+    violation_type: hardcoded_secret
+    severity: CRITICAL
+    pattern_type: regex
+    pattern: "(?i)(api_key|secret|token|password)\\s*[:=]\\s*[\"'][^\"']{8,}[\"']"
+    message: "Hardcoded API key or secret detected"
+    description: "Credentials should never be hardcoded in source code"
+    cwe_id: "CWE-798"
+    recommendation: "Use environment variables (process.env) or a secrets management service"
+    weight: 100
+    enabled: true
+    confidence: 0.9
+  
+  # Command Injection
+  - rule_id: JS-SEC-010
+    name: Child Process Execution
+    violation_type: command_injection
+    severity: CRITICAL
+    pattern_type: ast
+    pattern: "child_process.exec|child_process.spawn|child_process.execSync"
+    message: "Potential command injection in child process"
+    description: "Executing shell commands with user input can lead to command injection"
+    cwe_id: "CWE-78"
+    recommendation: "Use execFile instead of exec and validate all inputs. Avoid shell: true option"
+    weight: 90
+    enabled: true
+    confidence: 0.8
+  
+  # Eval Usage
+  - rule_id: JS-SEC-020
+    name: Dangerous Eval
+    violation_type: eval_usage
+    severity: CRITICAL
+    pattern_type: ast
+    pattern: "eval(|Function("
+    message: "Use of eval() or Function() constructor"
+    description: "eval() executes arbitrary code and is a major security risk"
+    cwe_id: "CWE-94"
+    recommendation: "Never use eval(). Use JSON.parse() for JSON or safer alternatives"
+    weight: 85
+    enabled: true
+    confidence: 1.0
+  
+  # SQL Injection
+  - rule_id: JS-SEC-030
+    name: SQL String Concatenation
+    violation_type: sql_injection
+    severity: HIGH
+    pattern_type: regex
+    pattern: '(query|execute).*\\+|`.*SELECT.*\\$\\{'
+    message: "Potential SQL injection via string concatenation"
+    description: "Building SQL queries with string concatenation is vulnerable"
+    cwe_id: "CWE-89"
+    recommendation: "Use parameterized queries or prepared statements"
+    weight: 85
+    enabled: true
+    confidence: 0.7
+  
+  # Unsafe Deserialization
+  - rule_id: JS-SEC-040
+    name: Unsafe Object Deserialization
+    violation_type: unsafe_deserialization
+    severity: HIGH
+    pattern_type: ast
+    pattern: "node-serialize|serialize-javascript"
+    message: "Potentially unsafe deserialization"
+    description: "Deserializing untrusted data can lead to code execution"
+    cwe_id: "CWE-502"
+    recommendation: "Avoid deserializing untrusted data or use JSON.parse for safe JSON parsing"
+    weight: 90
+    enabled: true
+    confidence: 0.8
+  
+  # Weak Crypto
+  - rule_id: JS-SEC-050
+    name: Weak Crypto Algorithm
+    violation_type: weak_crypto
+    severity: MEDIUM
+    pattern_type: regex
+    pattern: "createHash.*md5|createHash.*sha1"
+    message: "Weak cryptographic hash function"
+    description: "MD5 and SHA1 are cryptographically weak"
+    cwe_id: "CWE-327"
+    recommendation: "Use SHA-256 or stronger algorithms"
+    weight: 70
+    enabled: true
+    confidence: 1.0
+  
+  # XSS Vulnerability
+  - rule_id: JS-SEC-060
+    name: Potential XSS
+    violation_type: xss_vulnerability
+    severity: HIGH
+    pattern_type: regex
+    pattern: "innerHTML\\s*=|outerHTML\\s*=|document\\.write"
+    message: "Potential XSS vulnerability"
+    description: "Setting innerHTML with user input can lead to XSS"
+    cwe_id: "CWE-79"
+    recommendation: "Use textContent instead of innerHTML or properly sanitize user input with DOMPurify"
+    weight: 80
+    enabled: true
+    confidence: 0.7
+  
+  # CORS Misconfiguration
+  - rule_id: JS-SEC-070
+    name: CORS Wildcard
+    violation_type: cors_misconfiguration
+    severity: MEDIUM
+    pattern_type: regex
+    pattern: "Access-Control-Allow-Origin.*\\*"
+    message: "CORS configured with wildcard origin"
+    description: "Wildcard CORS allows any domain to access resources"
+    cwe_id: "CWE-942"
+    recommendation: "Specify allowed origins explicitly instead of using wildcard"
+    weight: 65
+    enabled: true
+    confidence: 0.9
+  
+  # Insecure Random
+  - rule_id: JS-SEC-080
+    name: Insecure Random
+    violation_type: insecure_random
+    severity: MEDIUM
+    pattern_type: ast
+    pattern: "Math.random"
+    message: "Cryptographically insecure random number generation"
+    description: "Math.random() is not suitable for security purposes"
+    cwe_id: "CWE-330"
+    recommendation: "Use crypto.randomBytes() or crypto.getRandomValues() for security-sensitive operations"
+    weight: 50
+    enabled: true
+    confidence: 0.7

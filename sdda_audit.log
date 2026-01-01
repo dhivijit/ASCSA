@@ -1,0 +1,4 @@
+{"timestamp": "2025-12-31T14:09:12.406395", "event_type": "VALIDATION_FAILURE", "details": {"field": "secret_id", "value": "SECRET_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", "reason": "Invalid format"}}
+{"timestamp": "2025-12-31T14:09:12.450832", "event_type": "SECRET_ACCESS", "details": {"secret_id": "SECRET_VALIDLENGTH", "actor": "valid-actor", "run_id": "run-2", "operation": "STORE"}}
+{"timestamp": "2025-12-31T14:09:12.450832", "event_type": "DATABASE_OPERATION", "details": {"operation": "INSERT", "table": "secret_usage", "record_count": 1}}
+{"timestamp": "2025-12-31T14:09:12.451561", "event_type": "SECRET_ACCESS", "details": {"secret_id": "SECRET_VALIDLENGTH", "actor": "SYSTEM", "run_id": "QUERY", "operation": "RETRIEVE"}}

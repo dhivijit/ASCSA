@@ -20,12 +20,45 @@ sdda:
     high_zscore: 3.5
     medium_zscore: 2.5
 
-# HCRS - Hybrid Code Risk Scoring Configuration (future)
+# HCRS - Hybrid Code Risk Scoring Configuration
 hcrs:
+  # Risk weights for different violation types
   risk_weights:
-    hardcoded_secret: 10
-    command_injection: 9
-    sql_injection: 8
+    hardcoded_secret: 100
+    command_injection: 90
+    sql_injection: 85
+    path_traversal: 80
+    unsafe_deserialization: 90
+    weak_crypto: 70
+    sensitive_logging: 60
+    unsafe_api: 75
+    xss_vulnerability: 80
+    unsanitized_input: 70
+    dangerous_file_ops: 75
+    insecure_random: 50
+    eval_usage: 85
+    cors_misconfiguration: 65
+  
+  # Severity thresholds (per file)
+  severity_thresholds:
+    critical: 200  # >= 200 points = CRITICAL
+    high: 100      # >= 100 points = HIGH
+    medium: 50     # >= 50 points = MEDIUM
+    low: 10        # >= 10 points = LOW
+  
+  # File analysis settings
+  max_file_size_kb: 500  # Skip files larger than this
+  max_files: 10000       # Max files to analyze per run
+  
+  # Supported file extensions
+  python_extensions:
+    - .py
+  javascript_extensions:
+    - .js
+    - .jsx
+    - .ts
+    - .tsx
+    - .mjs
     
 # SLGA - Secret Lineage Graph Configuration (future)
 slga:
