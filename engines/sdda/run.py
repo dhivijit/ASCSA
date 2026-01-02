@@ -32,7 +32,8 @@ def load_config(config_path: str = None) -> dict:
 def run_sdda(pipeline_run: PipelineRun, 
              secret_usages: List[SecretUsage],
              config_path: str = None,
-             db_path: str = None) -> DriftReport:
+             db_path: str = None,
+             store_report: bool = True) -> DriftReport:
     """
     Main entry point for Secret Drift Detection Algorithm.
     
@@ -41,6 +42,7 @@ def run_sdda(pipeline_run: PipelineRun,
         secret_usages: List of secret usage events in this run
         config_path: Path to configuration file (optional)
         db_path: Path to SQLite database (optional)
+        store_report: Whether to store the drift report in database (default: True)
     
     Returns:
         DriftReport with detected drifts
@@ -97,6 +99,10 @@ def run_sdda(pipeline_run: PipelineRun,
         summary=severity_counts,
         baseline_status=baseline_status
     )
+    
+    # Store drift report if enabled
+    if store_report:
+        db.store_drift_report(report)
     
     db.close()
     

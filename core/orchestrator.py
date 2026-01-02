@@ -5,6 +5,8 @@ Coordinates execution of SLGA, SDDA, and HCRS engines.
 """
 
 import logging
+import os
+import json
 from typing import Dict, Any, List
 from datetime import datetime
 from cli.context import ScanContext
@@ -147,19 +149,20 @@ class PipelineOrchestrator:
 
         try:
             from engines.slga.run import run_slga
+            from engines.slga.reporter import SLGAReporter
 
-            # Check for Neo4j credentials
-            if not (self.context.neo4j_uri and self.context.neo4j_user and self.context.neo4j_pass):
-                logger.warning("Neo4j credentials not configured. SLGA will run in limited mode.")
-                logger.warning("Set NEO4J_URI, NEO4J_USER, NEO4J_PASS environment variables for full functionality.")
-                self.results['slga_skipped'] = True
-                return None, []
-
-            graph, secrets = run_slga(
+            # Determine database path
+            slga_db_path = getattr(self.context, 'slga_db_path', None) or 'slga.db'
+            
+            # Run SLGA with storage enabled
+            graph, secrets, db_path = run_slga(
                 repo_path=self.context.repo_path,
                 ci_config_path=self.context.ci_config_path,
                 log_dir=self.context.log_dir,
-                artifact_dir=self.context.artifact_dir
+                artifact_dir=self.context.artifact_dir,
+                db_path=slga_db_path,
+                scan_id=self.context.run_id,
+                store_to_db=True
             )
 
             # Extract summary
@@ -171,11 +174,34 @@ class PipelineOrchestrator:
                 'total_secrets': total_secrets,
                 'total_files': total_files,
                 'total_commits': total_commits,
-                'graph_nodes': getattr(graph, 'node_count', 0),
-                'graph_edges': getattr(graph, 'edge_count', 0)
+                'graph_nodes': getattr(graph, 'node_count', 0) if graph else 0,
+                'graph_edges': getattr(graph, 'edge_count', 0) if graph else 0,
+                'database_path': db_path
             }
 
             logger.info(f"SLGA: Found {total_secrets} secrets across {total_files} files")
+            logger.info(f"SLGA: Data stored in database: {db_path}")
+            
+            # Generate and save text report
+            try:
+                reporter = SLGAReporter(db_path)
+                text_report = reporter.generate_text_report(secrets)
+                json_report = reporter.generate_json_report(secrets)
+                reporter.close()
+                
+                output_dir = self.context.reportout_dir or self.context.repo_path
+                
+                slga_text_path = os.path.join(output_dir, "slga.txt")
+                with open(slga_text_path, "w", encoding="utf-8") as f:
+                    f.write(text_report)
+                logger.info(f"SLGA text report saved to {slga_text_path}")
+                
+                slga_json_path = os.path.join(output_dir, "slga.json")
+                with open(slga_json_path, "w", encoding="utf-8") as f:
+                    f.write(json_report)
+                logger.info(f"SLGA JSON report saved to {slga_json_path}")
+            except Exception as e:
+                logger.error(f"Failed to generate SLGA reports: {e}", exc_info=True)
 
             return graph, secrets
 
@@ -197,6 +223,7 @@ class PipelineOrchestrator:
         try:
             from engines.sdda.run import run_sdda
             from engines.sdda.models import PipelineRun, SecretUsage
+            from engines.sdda.database import SDDADatabase
             
             # Build PipelineRun from context
             pipeline_run = PipelineRun(
@@ -229,11 +256,13 @@ class PipelineOrchestrator:
                     )
                     secret_usages.append(usage)
             
+            # Run SDDA with storage enabled
             result = run_sdda(
                 pipeline_run=pipeline_run,
                 secret_usages=secret_usages,
                 config_path=self.context.config_path,
-                db_path=self.context.sdda_db_path
+                db_path=self.context.sdda_db_path,
+                store_report=True
             )
             
             # Extract summary
@@ -249,10 +278,37 @@ class PipelineOrchestrator:
                     for d in result.drifted_secrets
                 ],
                 'summary': result.summary,
-                'baseline_status': result.baseline_status
+                'baseline_status': result.baseline_status,
+                'database_path': self.context.sdda_db_path
             }
             
             logger.info(f"SDDA: Analyzed {result.total_secrets_analyzed} secrets, found {len(result.drifted_secrets)} drifts")
+            logger.info(f"SDDA: Data stored in database: {self.context.sdda_db_path}")
+            
+            # Generate additional reports
+            try:
+                output_dir = self.context.reportout_dir or self.context.repo_path
+                
+                # Get database statistics
+                db = SDDADatabase(self.context.sdda_db_path)
+                stats = db.get_statistics()
+                drift_history = db.get_drift_history(limit=10)
+                db.close()
+                
+                # Generate stats report
+                stats_report = {
+                    'generated_at': datetime.now().isoformat(),
+                    'database_statistics': stats,
+                    'recent_drift_history': drift_history
+                }
+                
+                sdda_stats_path = os.path.join(output_dir, "sdda_stats.json")
+                with open(sdda_stats_path, "w", encoding="utf-8") as f:
+                    json.dump(stats_report, f, indent=2, default=str)
+                logger.info(f"SDDA statistics report saved to {sdda_stats_path}")
+                
+            except Exception as e:
+                logger.error(f"Failed to generate SDDA statistics: {e}", exc_info=True)
             
             return result
             

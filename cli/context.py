@@ -48,6 +48,7 @@ class ScanContext:
 
     # Database configuration
     sdda_db_path: Optional[str] = None
+    slga_db_path: Optional[str] = None
     neo4j_uri: Optional[str] = None
     neo4j_user: Optional[str] = None
     neo4j_pass: Optional[str] = None
@@ -151,6 +152,7 @@ def build_context(
     config_path = kwargs.pop('config_path', None)
     rules_path = kwargs.pop('rules_path', None)
     sdda_db_path = kwargs.pop('sdda_db_path', None)
+    slga_db_path = kwargs.pop('slga_db_path', None)
     neo4j_uri = kwargs.pop('neo4j_uri', None)
     neo4j_user = kwargs.pop('neo4j_user', None)
     neo4j_pass = kwargs.pop('neo4j_pass', None)
@@ -174,6 +176,7 @@ def build_context(
         config_path=config_path,
         rules_path=rules_path,
         sdda_db_path=sdda_db_path,
+        slga_db_path=slga_db_path,
         neo4j_uri=neo4j_uri,
         neo4j_user=neo4j_user,
         neo4j_pass=neo4j_pass,
