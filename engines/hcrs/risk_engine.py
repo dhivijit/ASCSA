@@ -149,9 +149,10 @@ def compute_risk(lineage, drift_report, osv_results):
     score = 0
     breakdown = {}
 
-    breakdown["dependencies"] = len(osv_results) * 10
-    breakdown["secret_lineage"] = len(lineage.secrets) * 5
-    breakdown["secret_drift"] = len(drift_report.drifts) * 15
+    # Handle None values defensively
+    breakdown["dependencies"] = len(osv_results) * 10 if osv_results else 0
+    breakdown["secret_lineage"] = len(lineage.secrets) * 5 if lineage and hasattr(lineage, 'secrets') else 0
+    breakdown["secret_drift"] = len(drift_report.drifted_secrets) * 15 if drift_report and hasattr(drift_report, 'drifted_secrets') else 0
 
     score = sum(breakdown.values())
 

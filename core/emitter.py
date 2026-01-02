@@ -111,7 +111,8 @@ class ResultEmitter:
             lines.append(f"{Fore.CYAN}{Style.BRIGHT}Hybrid Code Risk Scoring (HCRS){Style.RESET_ALL}")
             lines.append(f"{Fore.CYAN}{'─' * 80}{Style.RESET_ALL}")
             hcrs = results['hcrs']
-            lines.append(f"  Total Risk Score: {hcrs.get('total_score', 0):.2f}")
+            total_score = hcrs.get('total_score') or 0
+            lines.append(f"  Total Risk Score: {total_score:.2f}")
             lines.append(f"  Files Analyzed: {len(hcrs.get('file_scores', []))}")
             
             # Violation counts

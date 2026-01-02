@@ -197,9 +197,15 @@ class PipelineOrchestrator:
             # Extract secret usages from SLGA results
             secret_usages = []
             if hasattr(slga_result, 'secrets'):
+                import hashlib
                 for secret in slga_result.secrets:
+                    # Hash the secret value to create a valid secret_id
+                    # that conforms to InputValidator.SECRET_ID_PATTERN: ^[a-zA-Z0-9_\-\.]{1,255}$
+                    secret_hash = hashlib.sha256(secret.value.encode()).hexdigest()[:16]
+                    secret_id = f"secret_{secret_hash}"
+                    
                     usage = SecretUsage(
-                        secret_id=secret.value[:20] + "...",  # Truncate for ID
+                        secret_id=secret_id,
                         run_id=self.context.run_id,
                         timestamp=self.context.timestamp,
                         stages=set(),
