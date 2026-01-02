@@ -92,14 +92,27 @@ class PipelineOrchestrator:
         hcrs_result = None
         if not self.context.skip_hcrs:
             hcrs_result = self._run_hcrs(slga_result, sdda_result)
-            # Save HCRS output
-            try:
-                hcrs_path = os.path.join(output_dir, "hcrs.txt")
-                with open(hcrs_path, "w", encoding="utf-8") as f:
-                    json.dump(self.results.get('hcrs', {}), f, indent=2, default=str)
-                logger.info(f"HCRS output saved to {hcrs_path}")
-            except Exception as e:
-                logger.error(f"Failed to write HCRS output: {e}")
+            # Save HCRS output - both text and JSON reports
+            if hcrs_result:
+                try:
+                    from engines.hcrs.reporter import HCRSReporter
+                    
+                    # Save detailed text report
+                    hcrs_text_path = os.path.join(output_dir, "hcrs.txt")
+                    text_report = HCRSReporter.generate_text_report(hcrs_result)
+                    with open(hcrs_text_path, "w", encoding="utf-8") as f:
+                        f.write(text_report)
+                    logger.info(f"HCRS text report saved to {hcrs_text_path}")
+                    
+                    # Save detailed JSON report
+                    hcrs_json_path = os.path.join(output_dir, "hcrs.json")
+                    json_report = HCRSReporter.generate_json_report(hcrs_result)
+                    with open(hcrs_json_path, "w", encoding="utf-8") as f:
+                        f.write(json_report)
+                    logger.info(f"HCRS JSON report saved to {hcrs_json_path}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to write HCRS reports: {e}", exc_info=True)
         else:
             logger.info("HCRS: Skipped by configuration")
             self.results['hcrs_skipped'] = True
@@ -259,30 +272,39 @@ class PipelineOrchestrator:
         logger.info("=" * 80)
 
         try:
-            from engines.hcrs.run import run
+            from engines.hcrs.scanner import HCRSScanner
+            from engines.hcrs.reporter import HCRSReporter
 
-            # Use the legacy run() to include dep vulns, passing lineage and drift_report
-            hcrs_result = run(slga_result, sdda_result, self.context)
+            # Create scanner and perform full repository scan
+            scanner = HCRSScanner(
+                config_path=self.context.config_path,
+                rules_path=self.context.rules_path
+            )
+            
+            # Perform full scan
+            hcrs_result = scanner.scan_repository(self.context.repo_path)
 
-            # Try to extract dependency vulnerabilities if present
-            dep_vulns = []
-            if hasattr(hcrs_result, 'dependency_vulnerabilities'):
-                dep_vulns = hcrs_result.dependency_vulnerabilities
-            elif hasattr(hcrs_result, 'osv_results'):
-                dep_vulns = hcrs_result.osv_results
-            elif hasattr(hcrs_result, 'breakdown') and 'dependency_vulnerabilities' in hcrs_result.breakdown:
-                dep_vulns = hcrs_result.breakdown['dependency_vulnerabilities']
-
+            # Extract summary data
             self.results['hcrs'] = {
-                'total_score': getattr(hcrs_result, 'total', None) or getattr(hcrs_result, 'total_score', None),
-                'breakdown': getattr(hcrs_result, 'breakdown', {}),
-                'recommendation': getattr(hcrs_result, 'recommendation', None),
-                'dependency_vulnerabilities': dep_vulns
+                'total_score': hcrs_result.total_score,
+                'total_files_analyzed': hcrs_result.summary['total_files_analyzed'],
+                'total_violations': hcrs_result.summary['total_violations'],
+                'critical_count': hcrs_result.critical_count,
+                'high_count': hcrs_result.high_count,
+                'medium_count': hcrs_result.medium_count,
+                'low_count': hcrs_result.low_count,
+                'severity_counts': hcrs_result.summary['severity_counts'],
+                'violation_type_counts': hcrs_result.summary.get('violation_type_counts', {}),
+                'dependency_vulnerability_count': hcrs_result.summary.get('dependency_vulnerability_count', 0),
+                'recommendation': hcrs_result.recommendation,
+                'high_risk_files': hcrs_result.summary.get('high_risk_files', []),
+                'dependency_vulnerabilities': hcrs_result.dependency_vulnerabilities
             }
 
-            logger.info(f"HCRS: total score: {self.results['hcrs']['total_score']}")
-            if dep_vulns:
-                logger.info(f"HCRS: Found {len(dep_vulns)} dependency vulnerabilities")
+            logger.info(f"HCRS: total score: {hcrs_result.total_score:.2f}")
+            logger.info(f"HCRS: violations found - Critical: {hcrs_result.critical_count}, High: {hcrs_result.high_count}, Medium: {hcrs_result.medium_count}, Low: {hcrs_result.low_count}")
+            if hcrs_result.dependency_vulnerabilities:
+                logger.info(f"HCRS: Found {len(hcrs_result.dependency_vulnerabilities)} dependency vulnerabilities")
 
             return hcrs_result
 
@@ -306,7 +328,7 @@ class PipelineOrchestrator:
         # Check for secrets in drifted state with code violations
         if sdda_result and hcrs_result:
             drifted_count = len(sdda_result.drifted_secrets) if hasattr(sdda_result, 'drifted_secrets') else 0
-            violations_count = sum(1 for fs in hcrs_result.file_scores for v in fs.violations)
+            violations_count = hcrs_result.summary.get('total_violations', 0) if hasattr(hcrs_result, 'summary') else 0
             
             if drifted_count > 0 and violations_count > 0:
                 correlation_findings.append(
@@ -345,12 +367,19 @@ class PipelineOrchestrator:
         
         # HCRS recommendations
         if self.results.get('hcrs'):
-            top_violations = self.results['hcrs'].get('top_violations', [])
-            for violation in top_violations[:5]:
-                if violation.get('recommendation'):
-                    recommendations.append(
-                        f"{violation['file']}:{violation['line']} - {violation['recommendation']}"
-                    )
+            # Get high-risk files
+            high_risk_files = self.results['hcrs'].get('high_risk_files', [])
+            for file_info in high_risk_files[:5]:
+                recommendations.append(
+                    f"Review {file_info['file']} - Score: {file_info['score']:.2f}, Critical: {file_info['critical_count']}, High: {file_info['high_count']}"
+                )
+            
+            # Add general recommendation if there are vulnerabilities
+            dep_vuln_count = self.results['hcrs'].get('dependency_vulnerability_count', 0)
+            if dep_vuln_count > 0:
+                recommendations.append(
+                    f"Update dependencies to fix {dep_vuln_count} known vulnerabilities"
+                )
         
         self.results['recommendations'] = recommendations
     

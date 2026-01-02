@@ -1,10 +1,3 @@
-# Export functions for test compatibility (must be after class definition)
-generate_json_report = HCRSReporter.generate_json_report
-generate_text_report = HCRSReporter.generate_text_report
-
-# Export functions for test compatibility (must be after class definition)
-generate_json_report = HCRSReporter.generate_json_report
-generate_text_report = HCRSReporter.generate_text_report
 # HCRS report generator
 import json
 from typing import TextIO
