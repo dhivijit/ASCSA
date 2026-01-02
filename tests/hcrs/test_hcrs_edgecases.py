@@ -13,7 +13,7 @@ from engines.hcrs.models import Severity, ViolationType, SecurityViolation, File
 from engines.hcrs.scanner import HCRSScanner
 from engines.hcrs.python_analyzer import PythonSimpleAnalyzer
 from engines.hcrs.javascript_analyzer import JavaScriptAnalyzer
-from engines.hcrs.run import scan_file, scan_repository
+from engines.hcrs.run import scan_repository, scan_file
 from engines.hcrs.rule_loader import load_rules
 from engines.hcrs.config_loader import load_config
 

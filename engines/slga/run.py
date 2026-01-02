@@ -9,6 +9,7 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None):
     """
     Main entry for Secret Lineage Graph Construction.
     Scans repo, pipeline config, logs, artifacts; builds graph in Neo4j.
+    Returns a tuple: (LineageGraph, secrets)
     """
     secrets = detect_secrets(repo_path)
     file_to_commits = {}
@@ -32,4 +33,4 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None):
         secrets, file_to_commits, neo4j_uri, neo4j_user, neo4j_pass,
         stages=stages, logs=logs, artifacts=artifacts
     )
-    return graph
+    return graph, secrets

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from engines.hcrs.models import Severity, ViolationType
 from engines.hcrs.scanner import HCRSScanner
-from engines.hcrs.run import run_hcrs
+from engines.hcrs.run import run_hcrs, scan_repository, scan_file
 from engines.hcrs.osv_scanner import scan_dep_vulns
 
 

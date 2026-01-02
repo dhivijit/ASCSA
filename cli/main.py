@@ -149,25 +149,31 @@ def parse_arguments():
         default='console',
         help='Output format (default: console)'
     )
-    
+
     output_group.add_argument(
         '--output', '-o',
         type=str,
         help='Output file path (default: stdout)'
     )
-    
+
+    output_group.add_argument(
+        '--reportout',
+        type=str,
+        help='Directory to save per-engine and main report outputs (default: scan target directory)'
+    )
+
     output_group.add_argument(
         '--verbose', '-v',
         action='store_true',
         help='Enable verbose logging'
     )
-    
+
     output_group.add_argument(
         '--quiet', '-q',
         action='store_true',
         help='Suppress all output except errors'
     )
-    
+
     return parser.parse_args()
 
 
@@ -219,7 +225,8 @@ def main():
                 sdda_db_path=args.sdda_db,
                 neo4j_uri=args.neo4j_uri,
                 neo4j_user=args.neo4j_user,
-                neo4j_pass=args.neo4j_pass
+                neo4j_pass=args.neo4j_pass,
+                reportout_dir=args.reportout
             )
         except ValueError as e:
             logger.error(f"Configuration error: {e}")

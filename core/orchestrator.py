@@ -40,48 +40,90 @@ class PipelineOrchestrator:
     
     def run(self) -> Dict[str, Any]:
         """Execute the complete security pipeline."""
+        import os
+        import json
+        from datetime import datetime
         logger.info(f"Starting ASCSA-CI security scan: {self.context.run_id}")
         logger.info(f"Repository: {self.context.repo_path}")
         logger.info(f"Branch: {self.context.branch}, Environment: {self.context.environment}")
-        
+
+        # Determine output directory
+        output_dir = self.context.reportout_dir or self.context.repo_path
+        os.makedirs(output_dir, exist_ok=True)
+
         # Phase 1: Secret Lineage Graph Analysis (SLGA)
         slga_result = None
         if not self.context.skip_slga:
-            slga_result = self._run_slga()
+            slga_graph, slga_secrets = self._run_slga()
+            from core.contracts import SecretLineage
+            slga_result = SecretLineage(secrets=slga_secrets)  # For downstream compatibility
+            # Save SLGA output
+            try:
+                slga_path = os.path.join(output_dir, "slga.txt")
+                with open(slga_path, "w", encoding="utf-8") as f:
+                    json.dump(self.results.get('slga', {}), f, indent=2, default=str)
+                logger.info(f"SLGA output saved to {slga_path}")
+            except Exception as e:
+                logger.error(f"Failed to write SLGA output: {e}")
         else:
             logger.info("SLGA: Skipped by configuration")
             self.results['slga_skipped'] = True
-        
+
         # Phase 2: Secret Drift Detection (SDDA)
         sdda_result = None
         if not self.context.skip_sdda and slga_result:
             sdda_result = self._run_sdda(slga_result)
+            # Save SDDA output
+            try:
+                sdda_path = os.path.join(output_dir, "sdda.txt")
+                with open(sdda_path, "w", encoding="utf-8") as f:
+                    json.dump(self.results.get('sdda', {}), f, indent=2, default=str)
+                logger.info(f"SDDA output saved to {sdda_path}")
+            except Exception as e:
+                logger.error(f"Failed to write SDDA output: {e}")
         else:
             if self.context.skip_sdda:
                 logger.info("SDDA: Skipped by configuration")
             else:
                 logger.info("SDDA: Skipped (requires SLGA results)")
             self.results['sdda_skipped'] = True
-        
+
         # Phase 3: Hybrid Code Risk Scoring (HCRS)
         hcrs_result = None
         if not self.context.skip_hcrs:
-            hcrs_result = self._run_hcrs()
+            hcrs_result = self._run_hcrs(slga_result, sdda_result)
+            # Save HCRS output
+            try:
+                hcrs_path = os.path.join(output_dir, "hcrs.txt")
+                with open(hcrs_path, "w", encoding="utf-8") as f:
+                    json.dump(self.results.get('hcrs', {}), f, indent=2, default=str)
+                logger.info(f"HCRS output saved to {hcrs_path}")
+            except Exception as e:
+                logger.error(f"Failed to write HCRS output: {e}")
         else:
             logger.info("HCRS: Skipped by configuration")
             self.results['hcrs_skipped'] = True
-        
+
         # Phase 4: Correlation & Risk Assessment
         self._correlate_results(slga_result, sdda_result, hcrs_result)
-        
+
         # Phase 5: Generate Recommendations
         self._generate_recommendations()
-        
+
         # Phase 6: Determine Exit Code
         self._determine_exit_code()
-        
+
+        # Save main report (all results)
+        try:
+            report_path = os.path.join(output_dir, "ascsa_report.json")
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(self.results, f, indent=2, default=str)
+            logger.info(f"Main report saved to {report_path}")
+        except Exception as e:
+            logger.error(f"Failed to write main report: {e}")
+
         logger.info(f"Scan complete. Recommendation: {self.results['recommendation']}")
-        
+
         return self.results
     
     def _run_slga(self) -> Any:
@@ -89,49 +131,49 @@ class PipelineOrchestrator:
         logger.info("=" * 80)
         logger.info("Phase 1: Secret Lineage Graph Analysis (SLGA)")
         logger.info("=" * 80)
-        
+
         try:
             from engines.slga.run import run_slga
-            
+
             # Check for Neo4j credentials
             if not (self.context.neo4j_uri and self.context.neo4j_user and self.context.neo4j_pass):
                 logger.warning("Neo4j credentials not configured. SLGA will run in limited mode.")
                 logger.warning("Set NEO4J_URI, NEO4J_USER, NEO4J_PASS environment variables for full functionality.")
                 self.results['slga_skipped'] = True
-                return None
-            
-            result = run_slga(
+                return None, []
+
+            graph, secrets = run_slga(
                 repo_path=self.context.repo_path,
                 ci_config_path=self.context.ci_config_path,
                 log_dir=self.context.log_dir,
                 artifact_dir=self.context.artifact_dir
             )
-            
+
             # Extract summary
-            total_secrets = len(result.secrets) if hasattr(result, 'secrets') else 0
-            total_files = len(set(f for s in result.secrets for f in s.files)) if hasattr(result, 'secrets') else 0
-            total_commits = len(set(c for s in result.secrets for c in s.commits)) if hasattr(result, 'secrets') else 0
-            
+            total_secrets = len(secrets)
+            total_files = len(set(f for s in secrets for f in s.files))
+            total_commits = len(set(c for s in secrets for c in s.commits))
+
             self.results['slga'] = {
                 'total_secrets': total_secrets,
                 'total_files': total_files,
                 'total_commits': total_commits,
-                'graph_nodes': result.node_count if hasattr(result, 'node_count') else 0,
-                'graph_edges': result.edge_count if hasattr(result, 'edge_count') else 0
+                'graph_nodes': getattr(graph, 'node_count', 0),
+                'graph_edges': getattr(graph, 'edge_count', 0)
             }
-            
+
             logger.info(f"SLGA: Found {total_secrets} secrets across {total_files} files")
-            
-            return result
-            
+
+            return graph, secrets
+
         except ImportError as e:
             logger.error(f"SLGA: Engine import failed: {e}")
             self.results['slga_skipped'] = True
-            return None
+            return None, []
         except Exception as e:
             logger.error(f"SLGA: Execution failed: {e}", exc_info=True)
             self.results['slga_skipped'] = True
-            return None
+            return None, []
     
     def _run_sdda(self, slga_result) -> Any:
         """Execute Secret Drift Detection Analysis."""
@@ -204,61 +246,40 @@ class PipelineOrchestrator:
             self.results['sdda_skipped'] = True
             return None
     
-    def _run_hcrs(self) -> Any:
-        """Execute Hybrid Code Risk Scoring."""
+    def _run_hcrs(self, slga_result=None, sdda_result=None) -> Any:
+        """Execute Hybrid Code Risk Scoring and include dependency vulnerabilities."""
         logger.info("=" * 80)
         logger.info("Phase 3: Hybrid Code Risk Scoring (HCRS)")
         logger.info("=" * 80)
-        
+
         try:
-            from engines.hcrs.run import run_hcrs
-            
-            result = run_hcrs(
-                repo_path=self.context.repo_path,
-                config_path=self.context.config_path,
-                rules_path=self.context.rules_path,
-                changed_files=self.context.changed_files
-            )
-            
-            # Extract top violations for summary
-            top_violations = []
-            for file_score in result.file_scores:
-                for violation in file_score.violations:
-                    top_violations.append({
-                        'file': violation.location.file_path,
-                        'line': violation.location.line_start,
-                        'severity': violation.severity.value,
-                        'violation_type': violation.violation_type.value,
-                        'message': violation.message,
-                        'recommendation': violation.recommendation
-                    })
-            
-            # Sort by severity
-            severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3, 'INFO': 4}
-            top_violations.sort(key=lambda x: severity_order.get(x['severity'], 99))
-            
+            from engines.hcrs.run import run
+
+            # Use the legacy run() to include dep vulns, passing lineage and drift_report
+            hcrs_result = run(slga_result, sdda_result, self.context)
+
+            # Try to extract dependency vulnerabilities if present
+            dep_vulns = []
+            if hasattr(hcrs_result, 'dependency_vulnerabilities'):
+                dep_vulns = hcrs_result.dependency_vulnerabilities
+            elif hasattr(hcrs_result, 'osv_results'):
+                dep_vulns = hcrs_result.osv_results
+            elif hasattr(hcrs_result, 'breakdown') and 'dependency_vulnerabilities' in hcrs_result.breakdown:
+                dep_vulns = hcrs_result.breakdown['dependency_vulnerabilities']
+
             self.results['hcrs'] = {
-                'total_score': result.total_score,
-                'file_scores': [
-                    {
-                        'file': fs.file_path,
-                        'score': fs.total_score,
-                        'violations': len(fs.violations)
-                    }
-                    for fs in result.file_scores
-                ],
-                'critical_count': result.critical_count,
-                'high_count': result.high_count,
-                'medium_count': result.medium_count,
-                'low_count': result.low_count,
-                'top_violations': top_violations
+                'total_score': getattr(hcrs_result, 'total', None) or getattr(hcrs_result, 'total_score', None),
+                'breakdown': getattr(hcrs_result, 'breakdown', {}),
+                'recommendation': getattr(hcrs_result, 'recommendation', None),
+                'dependency_vulnerabilities': dep_vulns
             }
-            
-            logger.info(f"HCRS: Analyzed {len(result.file_scores)} files, total score: {result.total_score:.2f}")
-            logger.info(f"HCRS: CRITICAL={result.critical_count}, HIGH={result.high_count}, MEDIUM={result.medium_count}, LOW={result.low_count}")
-            
-            return result
-            
+
+            logger.info(f"HCRS: total score: {self.results['hcrs']['total_score']}")
+            if dep_vulns:
+                logger.info(f"HCRS: Found {len(dep_vulns)} dependency vulnerabilities")
+
+            return hcrs_result
+
         except ImportError as e:
             logger.error(f"HCRS: Engine import failed: {e}")
             self.results['hcrs_skipped'] = True

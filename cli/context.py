@@ -13,44 +13,45 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ScanContext:
     """Context object passed between all engines."""
-    
+
     # Required fields
     repo_path: str
     run_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: datetime = field(default_factory=datetime.now)
-    
+
     # Optional scan parameters
     changed_files: Optional[List[str]] = None
     branch: str = "main"
     environment: str = "development"
     actor: str = "cli-user"
-    
+
     # CI/CD specific paths (optional)
     ci_config_path: Optional[str] = None
     log_dir: Optional[str] = None
     artifact_dir: Optional[str] = None
-    
+
     # Configuration paths
     config_path: Optional[str] = None
     rules_path: Optional[str] = None
     thresholds_path: Optional[str] = None
-    
+
     # Engine control flags
     skip_slga: bool = False
     skip_sdda: bool = False
     skip_hcrs: bool = False
-    
+
     # Output options
     output_format: str = "console"  # console, json, yaml
     output_file: Optional[str] = None
     verbose: bool = False
-    
+    reportout_dir: Optional[str] = None  # Directory for per-engine/main outputs
+
     # Database configuration
     sdda_db_path: Optional[str] = None
     neo4j_uri: Optional[str] = None
     neo4j_user: Optional[str] = None
     neo4j_pass: Optional[str] = None
-    
+
     def __post_init__(self):
         """Validate and normalize context."""
         # Normalize repo path
@@ -153,7 +154,8 @@ def build_context(
     neo4j_uri = kwargs.pop('neo4j_uri', None)
     neo4j_user = kwargs.pop('neo4j_user', None)
     neo4j_pass = kwargs.pop('neo4j_pass', None)
-    
+    reportout_dir = kwargs.pop('reportout_dir', None)
+
     return ScanContext(
         repo_path=repo_path,
         branch=branch,
@@ -174,5 +176,6 @@ def build_context(
         sdda_db_path=sdda_db_path,
         neo4j_uri=neo4j_uri,
         neo4j_user=neo4j_user,
-        neo4j_pass=neo4j_pass
+        neo4j_pass=neo4j_pass,
+        reportout_dir=reportout_dir
     )

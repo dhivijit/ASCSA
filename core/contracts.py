@@ -23,7 +23,7 @@ class DriftEvent:
 
 @dataclass
 class DriftReport:
-    drifts: List[DriftEvent]
+    drifted_secrets: List[DriftEvent]
 
 @dataclass
 class RiskScore:

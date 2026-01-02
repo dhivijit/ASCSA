@@ -1,3 +1,8 @@
+def load_rules(rules_path: str = None):
+    """
+    Backward-compatible function to load rules, returns a RuleLoader instance.
+    """
+    return RuleLoader(rules_path)
 # HCRS rule loader
 import os
 import yaml

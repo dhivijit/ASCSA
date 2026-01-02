@@ -1,3 +1,8 @@
+def load_config(config_path: str = None):
+    """
+    Backward-compatible function to load config, returns the HCRS config dict.
+    """
+    return load_hcrs_config(config_path)
 # HCRS configuration loader
 import os
 import yaml

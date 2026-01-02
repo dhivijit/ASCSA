@@ -23,6 +23,7 @@ class ViolationType(Enum):
     SENSITIVE_LOGGING = "sensitive_logging"
     UNSAFE_API = "unsafe_api"
     XSS_VULNERABILITY = "xss_vulnerability"
+    XSS = "xss_vulnerability"  # Alias for test compatibility
     UNSANITIZED_INPUT = "unsanitized_input"
     DANGEROUS_FILE_OPS = "dangerous_file_ops"
     INSECURE_RANDOM = "insecure_random"
@@ -50,6 +51,14 @@ class SecurityViolation:
     cwe_id: Optional[str] = None  # Common Weakness Enumeration ID
     recommendation: str = ""
     confidence: float = 1.0  # 0.0 to 1.0
+
+    @property
+    def file_path(self) -> str:
+        return self.location.file_path if self.location else None
+
+    @property
+    def line_number(self) -> Optional[int]:
+        return self.location.line_start if self.location else None
     
 @dataclass
 class FileRiskScore:
@@ -60,6 +69,10 @@ class FileRiskScore:
     violations: List[SecurityViolation] = field(default_factory=list)
     severity_breakdown: Dict[str, int] = field(default_factory=dict)
     lines_analyzed: int = 0
+
+    @property
+    def risk_score(self) -> float:
+        return self.total_score
     
 @dataclass
 class RepositoryRiskScore:
@@ -71,6 +84,10 @@ class RepositoryRiskScore:
     summary: Dict[str, any] = field(default_factory=dict)
     recommendation: str = ""
     dependency_vulnerabilities: List[Dict] = field(default_factory=list)  # OSV scan results
+
+    @property
+    def risk_score(self) -> float:
+        return self.total_score
     
     @property
     def critical_count(self) -> int:

@@ -9,7 +9,7 @@ python_rules:
     violation_type: hardcoded_secret
     severity: CRITICAL
     pattern_type: regex
-    pattern: "(?i)(password|passwd|pwd|secret|token|api_key|access_key)\\s*=\\s*[\"'][^\"']{8,}[\"']"
+    pattern: '(?is)(password|passwd|pwd|secret[_a-zA-Z0-9]*|token|api_key|access_key)\s*=\s*(["\'`]{1,3})(.+?)\2'
     message: "Hardcoded password or secret detected"
     description: "Credentials should never be hardcoded in source code"
     cwe_id: "CWE-798"

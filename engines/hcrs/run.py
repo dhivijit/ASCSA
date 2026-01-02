@@ -1,3 +1,20 @@
+def scan_file(filepath: str):
+    """
+    Scan a single file for code risks using HCRSScanner.
+    Returns a risk report for the file.
+    """
+    from .scanner import HCRSScanner
+    scanner = HCRSScanner()
+    return scanner.scan_file(filepath)
+
+def scan_repository(repo_path: str):
+    """
+    Scan an entire repository for code risks using HCRSScanner.
+    Returns a repository risk report.
+    """
+    from .scanner import HCRSScanner
+    scanner = HCRSScanner()
+    return scanner.scan_repository(repo_path)
 # HCRS run logic - Main entry point
 from typing import Optional, List
 from .scanner import HCRSScanner
