@@ -1,4 +1,4 @@
-# requirements.txt for secops-core
+# requirements.txt for ASCSA-CI
 neo4j>=5.0
 pyyaml
 regex
@@ -7,6 +7,7 @@ pytest
 python-dotenv
 cryptography>=41.0.0
 requests
+colorama
 
 # Optional: Tree-sitter for advanced AST analysis
 # Uncomment to enable tree-sitter support

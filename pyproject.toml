@@ -1,1 +1,66 @@
-# pyproject.toml for secops-core
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ascsa-ci"
+version = "0.1.0"
+description = "Autonomous Secret & Code Security Agent for CI/CD"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "ASCSA Contributors"}
+]
+keywords = ["security", "cicd", "secrets", "static-analysis", "devsecops"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "neo4j>=5.0",
+    "pyyaml",
+    "regex",
+    "gitpython",
+    "python-dotenv",
+    "cryptography>=41.0.0",
+    "requests",
+    "colorama",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "black",
+    "flake8",
+    "mypy",
+]
+ast = [
+    "tree-sitter>=0.20.0",
+    "tree-sitter-python>=0.20.0",
+    "tree-sitter-javascript>=0.20.0",
+]
+
+[project.scripts]
+ascsa = "cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/ascsa-ci"
+Documentation = "https://github.com/yourusername/ascsa-ci#readme"
+Repository = "https://github.com/yourusername/ascsa-ci"
+Issues = "https://github.com/yourusername/ascsa-ci/issues"
+
+[tool.setuptools]
+packages = ["cli", "core", "engines", "engines.hcrs", "engines.sdda", "engines.slga", "output", "config"]
+
+[tool.setuptools.package-data]
+config = ["*.yaml"]
