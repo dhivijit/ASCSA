@@ -173,7 +173,7 @@ class HCRSReporter:
         lines.append("End of Report")
         lines.append("=" * 80)
         
-        return "\\n".join(lines)
+        return "\n".join(lines)
     
     @staticmethod
     def save_report(repo_score: RepositoryRiskScore, output_path: str, format: str = 'json'):
