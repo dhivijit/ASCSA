@@ -32,9 +32,11 @@ class PipelineOrchestrator:
             'slga': None,
             'sdda': None,
             'hcrs': None,
+            'csce': None,
             'slga_skipped': False,
             'sdda_skipped': False,
             'hcrs_skipped': False,
+            'csce_skipped': False,
             'recommendation': 'UNKNOWN',
             'recommendations': [],
             'exit_code': exit_codes.SUCCESS
@@ -56,9 +58,7 @@ class PipelineOrchestrator:
         # Phase 1: Secret Lineage Graph Analysis (SLGA)
         slga_result = None
         if not self.context.skip_slga:
-            slga_graph, slga_secrets = self._run_slga()
-            from core.contracts import SecretLineage
-            slga_result = SecretLineage(secrets=slga_secrets)  # For downstream compatibility
+            slga_result = self._run_slga()  # Returns SecretLineage object
             # Save SLGA output
             try:
                 slga_path = os.path.join(output_dir, "slga.txt")
@@ -119,13 +119,16 @@ class PipelineOrchestrator:
             logger.info("HCRS: Skipped by configuration")
             self.results['hcrs_skipped'] = True
 
-        # Phase 4: Correlation & Risk Assessment
+        # Phase 4: CSCE - Code-Secret Correlation Engine
+        csce_result = self._run_csce(hcrs_result, sdda_result, slga_result)
+
+        # Phase 5: Correlation & Risk Assessment (Legacy)
         self._correlate_results(slga_result, sdda_result, hcrs_result)
 
-        # Phase 5: Generate Recommendations
+        # Phase 6: Generate Recommendations
         self._generate_recommendations()
 
-        # Phase 6: Determine Exit Code
+        # Phase 7: Determine Exit Code
         self._determine_exit_code()
 
         # Save main report (all results)
@@ -235,16 +238,23 @@ class PipelineOrchestrator:
             except Exception as e:
                 logger.error(f"Failed to generate SLGA reports: {e}", exc_info=True)
 
-            return graph, secrets
+            # Wrap results in SecretLineage for downstream engines
+            from core.contracts import SecretLineage
+            lineage = SecretLineage(secrets=secrets)
+            lineage.graph = graph  # Attach graph for CSCE access
+            
+            return lineage
 
         except ImportError as e:
             logger.error(f"SLGA: Engine import failed: {e}")
             self.results['slga_skipped'] = True
-            return None, []
+            from core.contracts import SecretLineage
+            return SecretLineage(secrets=[])
         except Exception as e:
             logger.error(f"SLGA: Execution failed: {e}", exc_info=True)
             self.results['slga_skipped'] = True
-            return None, []
+            from core.contracts import SecretLineage
+            return SecretLineage(secrets=[])
     
     def _run_sdda(self, slga_result) -> Any:
         """Execute Secret Drift Detection Analysis."""
@@ -405,10 +415,122 @@ class PipelineOrchestrator:
             self.results['hcrs_skipped'] = True
             return None
     
-    def _correlate_results(self, slga_result, sdda_result, hcrs_result):
-        """Correlate results from all engines to identify compound risks."""
+    def _run_csce(self, hcrs_result, sdda_result, slga_result):
+        """Execute Code-Secret Correlation Engine."""
         logger.info("=" * 80)
-        logger.info("Phase 4: Correlation & Risk Assessment")
+        logger.info("Phase 4: Code-Secret Correlation Engine (CSCE)")
+        logger.info("=" * 80)
+        
+        # Check if we have enough data for correlation
+        if not hcrs_result:
+            logger.info("CSCE: Skipped (requires HCRS results)")
+            self.results['csce_skipped'] = True
+            return None
+        
+        try:
+            from engines.csce import run_csce
+            from engines.csce.reporter import CSCEReporter
+            
+            # Extract data from engine results
+            violations = []
+            secrets = []
+            drifts = []
+            neo4j_graph = None
+            
+            # Get HCRS violations
+            if hcrs_result:
+                # hcrs_result is a RepositoryRiskScore object
+                for file_score in hcrs_result.file_scores:
+                    violations.extend(file_score.violations)
+                logger.info(f"CSCE: Loaded {len(violations)} HCRS violations")
+            
+            # Get SLGA secrets and graph
+            if slga_result:
+                # slga_result is a SecretLineage object with secrets list and optional graph
+                if hasattr(slga_result, 'secrets'):
+                    secrets = slga_result.secrets
+                    neo4j_graph = getattr(slga_result, 'graph', None)
+                    
+                    if isinstance(secrets, list):
+                        logger.info(f"CSCE: Loaded {len(secrets)} SLGA secrets")
+                    if neo4j_graph:
+                        logger.info("CSCE: Neo4j graph available for propagation correlation")
+                else:
+                    logger.warning(f"CSCE: Unexpected SLGA result type: {type(slga_result)}")
+            
+            # Get SDDA drifts
+            if sdda_result and hasattr(sdda_result, 'drifted_secrets'):
+                drifts = sdda_result.drifted_secrets
+                logger.info(f"CSCE: Loaded {len(drifts)} SDDA drifts")
+            
+            # Run correlation
+            csce_report = run_csce(
+                hcrs_violations=violations,
+                sdda_drifts=drifts if drifts else None,
+                slga_secrets=secrets if secrets else None,
+                neo4j_graph=neo4j_graph
+            )
+            
+            # Extract summary
+            self.results['csce'] = {
+                'total_correlations': csce_report.total_correlations,
+                'critical_count': csce_report.critical_count,
+                'high_count': csce_report.high_count,
+                'medium_count': csce_report.medium_count,
+                'low_count': csce_report.low_count,
+                'avg_confidence': round(csce_report.avg_confidence, 2),
+                'high_confidence_count': csce_report.high_confidence_count,
+                'top_priorities': [
+                    {
+                        'id': c.correlation_id,
+                        'type': c.correlation_type.value,
+                        'severity': c.severity.value,
+                        'confidence': round(c.confidence, 2),
+                        'description': c.description,
+                        'recommendation': c.recommendation
+                    }
+                    for c in csce_report.top_priorities[:10]
+                ]
+            }
+            
+            logger.info(f"CSCE: Found {csce_report.total_correlations} correlations")
+            logger.info(f"CSCE: Critical: {csce_report.critical_count}, High: {csce_report.high_count}, Medium: {csce_report.medium_count}")
+            logger.info(f"CSCE: Average confidence: {csce_report.avg_confidence:.1%}")
+            
+            # Generate and save reports
+            try:
+                output_dir = self.context.reportout_dir or self.context.repo_path
+                
+                # Save text report
+                csce_text_path = os.path.join(output_dir, "csce.txt")
+                text_report = CSCEReporter.generate_text_report(csce_report)
+                with open(csce_text_path, "w", encoding="utf-8") as f:
+                    f.write(text_report)
+                logger.info(f"CSCE text report saved to {csce_text_path}")
+                
+                # Save JSON report
+                csce_json_path = os.path.join(output_dir, "csce.json")
+                CSCEReporter.save_report(csce_report, csce_json_path, format='json')
+                logger.info(f"CSCE JSON report saved to {csce_json_path}")
+                
+            except Exception as e:
+                logger.error(f"Failed to save CSCE reports: {e}", exc_info=True)
+            
+            return csce_report
+            
+        except ImportError as e:
+            logger.error(f"CSCE: Engine import failed: {e}")
+            self.results['csce_skipped'] = True
+            return None
+        except Exception as e:
+            logger.error(f"CSCE: Execution failed: {e}", exc_info=True)
+            self.results['csce_skipped'] = True
+            return None
+    
+    def _correlate_results(self, slga_result, sdda_result, hcrs_result):
+        """Correlate results from all engines to identify compound risks (Legacy - now handled by CSCE)."""
+        logger.info("=" * 80)
+        logger.info("Phase 5: Legacy Correlation & Risk Assessment")
         logger.info("=" * 80)
         
         correlation_findings = []
@@ -451,6 +573,28 @@ class PipelineOrchestrator:
     def _generate_recommendations(self):
         """Generate actionable recommendations based on findings."""
         recommendations = []
+        
+        # CSCE recommendations (highest priority)
+        if self.results.get('csce') and not self.results.get('csce_skipped'):
+            top_priorities = self.results['csce'].get('top_priorities', [])
+            critical_correlations = [p for p in top_priorities if p['severity'] == 'CRITICAL']
+            
+            if critical_correlations:
+                recommendations.append(
+                    f"🚨 CSCE: {len(critical_correlations)} CRITICAL correlation(s) detected - immediate action required!"
+                )
+                
+                # Add top 3 critical recommendations
+                for corr in critical_correlations[:3]:
+                    recommendations.append(
+                        f"  → {corr['type'].upper()}: {corr['recommendation']}"
+                    )
+            
+            high_correlations = [p for p in top_priorities if p['severity'] == 'HIGH']
+            if high_correlations:
+                recommendations.append(
+                    f"⚠️  CSCE: {len(high_correlations)} HIGH confidence correlation(s) require review"
+                )
         
         # SLGA recommendations
         if self.results.get('slga'):
@@ -513,18 +657,25 @@ class PipelineOrchestrator:
         high_count = 0
         medium_count = 0
         
-        # Count HCRS violations
-        if self.results.get('hcrs'):
-            critical_count += self.results['hcrs'].get('critical_count', 0)
-            high_count += self.results['hcrs'].get('high_count', 0)
-            medium_count += self.results['hcrs'].get('medium_count', 0)
-        
-        # Count SDDA drifts
-        if self.results.get('sdda'):
-            summary = self.results['sdda'].get('summary', {})
-            critical_count += summary.get('CRITICAL', 0)
-            high_count += summary.get('HIGH', 0)
-            medium_count += summary.get('MEDIUM', 0)
+        # Count CSCE correlations (highest priority)
+        if self.results.get('csce') and not self.results.get('csce_skipped'):
+            critical_count += self.results['csce'].get('critical_count', 0)
+            high_count += self.results['csce'].get('high_count', 0)
+            medium_count += self.results['csce'].get('medium_count', 0)
+        else:
+            # Fallback to individual engine counts if CSCE not run
+            # Count HCRS violations
+            if self.results.get('hcrs'):
+                critical_count += self.results['hcrs'].get('critical_count', 0)
+                high_count += self.results['hcrs'].get('high_count', 0)
+                medium_count += self.results['hcrs'].get('medium_count', 0)
+            
+            # Count SDDA drifts
+            if self.results.get('sdda'):
+                summary = self.results['sdda'].get('summary', {})
+                critical_count += summary.get('CRITICAL', 0)
+                high_count += summary.get('HIGH', 0)
+                medium_count += summary.get('MEDIUM', 0)
         
         # Determine recommendation and exit code
         if critical_count > 0:
