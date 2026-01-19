@@ -8,7 +8,7 @@ from engines.slga.models import Secret
 
 TEST_NEO4J_URI = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
 TEST_NEO4J_USER = os.environ.get('NEO4J_USER', 'neo4j')
-TEST_NEO4J_PASS = os.environ.get('NEO4J_PASS', 'testtest')
+TEST_NEO4J_PASS = os.environ.get('NEO4J_PASSWORD', 'testtest')
 
 def create_sample_repo(tmpdir):
     # Create a sample Python file with a secret

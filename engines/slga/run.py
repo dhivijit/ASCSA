@@ -1,5 +1,6 @@
 # SLGA run logic
 import os
+import logging
 from datetime import datetime
 from .detector import detect_secrets
 from .git_parser import get_commits_for_file
@@ -7,6 +8,8 @@ from .graph import build_lineage_graph
 from .pipeline_scanner import scan_pipeline_stages, scan_logs_for_secrets, scan_artifacts_for_secrets
 from .database import SLGADatabase
 from .reporter import SLGAReporter
+
+logger = logging.getLogger(__name__)
 
 def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None, 
              db_path=None, scan_id=None, store_to_db=True):
@@ -113,14 +116,47 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None,
     
     # Build Neo4j graph if credentials are available
     graph = None
+    propagation_analysis = None
     neo4j_uri = os.environ.get('NEO4J_URI')
     neo4j_user = os.environ.get('NEO4J_USER')
-    neo4j_pass = os.environ.get('NEO4J_PASS')
+    neo4j_pass = os.environ.get('NEO4J_PASSWORD')
     
     if neo4j_uri and neo4j_user and neo4j_pass:
-        graph = build_lineage_graph(
-            secrets, file_to_commits, neo4j_uri, neo4j_user, neo4j_pass,
-            stages=stages, logs=logs, artifacts=artifacts
-        )
+        try:
+            graph = build_lineage_graph(
+                secrets, file_to_commits, neo4j_uri, neo4j_user, neo4j_pass,
+                stages=stages, logs=logs, artifacts=artifacts
+            )
+            logger.info("Neo4j graph successfully created with lineage data")
+            
+            # Perform propagation analysis on the graph
+            logger.info("Performing Neo4j propagation analysis...")
+            try:
+                propagation_analysis = {
+                    'summary': graph.get_all_secrets_propagation_summary(),
+                    'critical_chains': graph.find_critical_propagation_chains(),
+                    'individual_analysis': []
+                }
+                
+                # Analyze top secrets (limit to 10 for performance)
+                for secret in secrets[:10]:
+                    analysis = graph.analyze_secret_propagation(secret.value)
+                    if analysis:
+                        propagation_analysis['individual_analysis'].append(analysis)
+                
+                # Count high-risk secrets
+                high_risk_count = sum(1 for a in propagation_analysis['individual_analysis'] 
+                                     if a['severity'] in ['CRITICAL', 'HIGH'])
+                logger.info(f"Propagation analysis complete: {high_risk_count} high-risk secrets identified")
+                
+            except Exception as e:
+                logger.error(f"Failed to perform propagation analysis: {e}")
+                propagation_analysis = None
+            
+        except Exception as e:
+            logger.error(f"Failed to create Neo4j graph: {e}")
+            logger.warning("Continuing with SQLite-only storage. Neo4j lineage graph unavailable.")
+    else:
+        logger.warning("Neo4j credentials not found (NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD). Skipping graph creation. Using SQLite-only storage.")
     
-    return graph, secrets, db_path if store_to_db else None
+    return graph, secrets, db_path if store_to_db else None, propagation_analysis

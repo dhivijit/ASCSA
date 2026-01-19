@@ -137,7 +137,7 @@ def parse_arguments():
     db_group.add_argument(
         '--neo4j-pass',
         type=str,
-        help='Neo4j password (default: from NEO4J_PASS env var)'
+        help='Neo4j password (default: from NEO4J_PASSWORD env var)'
     )
     
     # Output options

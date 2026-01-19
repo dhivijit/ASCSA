@@ -155,7 +155,7 @@ class PipelineOrchestrator:
             slga_db_path = getattr(self.context, 'slga_db_path', None) or 'slga.db'
             
             # Run SLGA with storage enabled
-            graph, secrets, db_path = run_slga(
+            result = run_slga(
                 repo_path=self.context.repo_path,
                 ci_config_path=self.context.ci_config_path,
                 log_dir=self.context.log_dir,
@@ -164,6 +164,13 @@ class PipelineOrchestrator:
                 scan_id=self.context.run_id,
                 store_to_db=True
             )
+            
+            # Unpack results (supports both old and new return format)
+            if len(result) == 4:
+                graph, secrets, db_path, propagation_analysis = result
+            else:
+                graph, secrets, db_path = result
+                propagation_analysis = None
 
             # Extract summary
             total_secrets = len(secrets)
@@ -176,8 +183,33 @@ class PipelineOrchestrator:
                 'total_commits': total_commits,
                 'graph_nodes': getattr(graph, 'node_count', 0) if graph else 0,
                 'graph_edges': getattr(graph, 'edge_count', 0) if graph else 0,
-                'database_path': db_path
+                'database_path': db_path,
+                'neo4j_analysis_available': propagation_analysis is not None
             }
+            
+            # Add propagation analysis if available
+            if propagation_analysis:
+                high_risk_secrets = [a for a in propagation_analysis.get('individual_analysis', []) 
+                                    if a['severity'] in ['CRITICAL', 'HIGH']]
+                
+                self.results['slga']['propagation_analysis'] = {
+                    'total_analyzed': len(propagation_analysis.get('individual_analysis', [])),
+                    'high_risk_count': len(high_risk_secrets),
+                    'critical_chains': len(propagation_analysis.get('critical_chains', [])),
+                    'high_risk_secrets': high_risk_secrets[:5]  # Top 5 for summary
+                }
+                
+                logger.info(f"Neo4j propagation analysis: {len(high_risk_secrets)} high-risk secrets detected")
+                
+                # Save detailed propagation analysis
+                try:
+                    output_dir = self.context.reportout_dir or self.context.repo_path
+                    propagation_path = os.path.join(output_dir, "slga_propagation_analysis.json")
+                    with open(propagation_path, "w", encoding="utf-8") as f:
+                        json.dump(propagation_analysis, f, indent=2, default=str)
+                    logger.info(f"Propagation analysis saved to {propagation_path}")
+                except Exception as e:
+                    logger.error(f"Failed to save propagation analysis: {e}")
 
             logger.info(f"SLGA: Found {total_secrets} secrets across {total_files} files")
             logger.info(f"SLGA: Data stored in database: {db_path}")
@@ -391,6 +423,22 @@ class PipelineOrchestrator:
                     f"Found {drifted_count} drifted secrets AND {violations_count} code violations - high risk of secret exposure"
                 )
         
+        # Check for Neo4j propagation analysis results
+        if self.results.get('slga', {}).get('propagation_analysis'):
+            prop_analysis = self.results['slga']['propagation_analysis']
+            high_risk_count = prop_analysis.get('high_risk_count', 0)
+            critical_chains = prop_analysis.get('critical_chains', 0)
+            
+            if high_risk_count > 0:
+                correlation_findings.append(
+                    f"Neo4j analysis: {high_risk_count} secrets with HIGH/CRITICAL propagation risk detected"
+                )
+            
+            if critical_chains > 0:
+                correlation_findings.append(
+                    f"Neo4j analysis: {critical_chains} critical propagation chain(s) found (code -> pipeline -> logs/artifacts)"
+                )
+        
         if correlation_findings:
             logger.warning("Correlation Analysis:")
             for finding in correlation_findings:
@@ -411,6 +459,26 @@ class PipelineOrchestrator:
                 recommendations.append(
                     f"Remove {secret_count} hardcoded secret(s) from repository. Use environment variables or secret management services."
                 )
+            
+            # Neo4j propagation analysis recommendations
+            if self.results['slga'].get('propagation_analysis'):
+                prop_analysis = self.results['slga']['propagation_analysis']
+                high_risk_secrets = prop_analysis.get('high_risk_secrets', [])
+                
+                for secret_analysis in high_risk_secrets[:3]:  # Top 3 high-risk secrets
+                    severity = secret_analysis.get('severity', 'UNKNOWN')
+                    risk_score = secret_analysis.get('risk_score', 0)
+                    risk_factors = secret_analysis.get('risk_factors', [])
+                    
+                    recommendations.append(
+                        f"{severity} propagation risk (score: {risk_score}): {'; '.join(risk_factors[:2])}"
+                    )
+                
+                critical_chains = prop_analysis.get('critical_chains', 0)
+                if critical_chains > 0:
+                    recommendations.append(
+                        f"URGENT: {critical_chains} secret(s) propagated from code to pipeline to logs/artifacts - immediate remediation required"
+                    )
         
         # SDDA recommendations
         if self.results.get('sdda'):

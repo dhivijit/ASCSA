@@ -87,7 +87,7 @@ class ScanContext:
         if not self.neo4j_user:
             self.neo4j_user = os.environ.get('NEO4J_USER')
         if not self.neo4j_pass:
-            self.neo4j_pass = os.environ.get('NEO4J_PASS')
+            self.neo4j_pass = os.environ.get('NEO4J_PASSWORD')
         
         logger.debug(f"Context created for scan: {self.run_id}")
         logger.debug(f"Repository: {self.repo_path}")
