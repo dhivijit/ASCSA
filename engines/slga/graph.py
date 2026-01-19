@@ -142,28 +142,47 @@ class LineageGraph:
     def analyze_secret_propagation(self, secret_value):
         """Comprehensive propagation analysis for a secret"""
         with self.driver.session() as session:
-            # Get propagation scope
-            scope_result = session.run(
-                """
-                MATCH (s:Secret {value: $value})
-                OPTIONAL MATCH (s)-[:APPEARS_IN]->(f:File)
-                OPTIONAL MATCH (f)-[:IN_COMMIT]->(c:Commit)
-                OPTIONAL MATCH (s)-[:USED_IN]->(st:Stage)
-                OPTIONAL MATCH (s)-[:APPEARS_IN_LOG]->(l:Log)
-                OPTIONAL MATCH (s)-[:APPEARS_IN_ARTIFACT]->(a:Artifact)
+            # Check what relationships exist in the graph
+            rel_check = session.run("""
+                MATCH ()-[r]->()
+                RETURN DISTINCT type(r) as rel_type
+            """)
+            existing_rels = {rec['rel_type'] for rec in rel_check}
+            
+            # Build conditional query
+            query_parts = ["MATCH (s:Secret {value: $value})"]
+            query_parts.append("OPTIONAL MATCH (s)-[:APPEARS_IN]->(f:File)")
+            query_parts.append("OPTIONAL MATCH (f)-[:IN_COMMIT]->(c:Commit)")
+            
+            if 'USED_IN' in existing_rels:
+                query_parts.append("OPTIONAL MATCH (s)-[:USED_IN]->(st:Stage)")
+            if 'APPEARS_IN_LOG' in existing_rels:
+                query_parts.append("OPTIONAL MATCH (s)-[:APPEARS_IN_LOG]->(l:Log)")
+            if 'APPEARS_IN_ARTIFACT' in existing_rels:
+                query_parts.append("OPTIONAL MATCH (s)-[:APPEARS_IN_ARTIFACT]->(a:Artifact)")
+            
+            query_parts.append("""
                 RETURN 
                     count(DISTINCT f) as file_count,
                     count(DISTINCT c) as commit_count,
-                    count(DISTINCT st) as stage_count,
-                    count(DISTINCT l) as log_count,
-                    count(DISTINCT a) as artifact_count,
+                    {} as stage_count,
+                    {} as log_count,
+                    {} as artifact_count,
                     collect(DISTINCT f.path) as files,
-                    collect(DISTINCT st.name) as stages,
-                    collect(DISTINCT l.path) as logs,
-                    collect(DISTINCT a.path) as artifacts
-                """,
-                value=secret_value
-            )
+                    {} as stages,
+                    {} as logs,
+                    {} as artifacts
+            """.format(
+                "count(DISTINCT st)" if 'USED_IN' in existing_rels else "0",
+                "count(DISTINCT l)" if 'APPEARS_IN_LOG' in existing_rels else "0",
+                "count(DISTINCT a)" if 'APPEARS_IN_ARTIFACT' in existing_rels else "0",
+                "collect(DISTINCT st.name)" if 'USED_IN' in existing_rels else "[]",
+                "collect(DISTINCT l.path)" if 'APPEARS_IN_LOG' in existing_rels else "[]",
+                "collect(DISTINCT a.path)" if 'APPEARS_IN_ARTIFACT' in existing_rels else "[]"
+            ))
+            
+            # Get propagation scope
+            scope_result = session.run("\n".join(query_parts), value=secret_value)
             
             scope = scope_result.single()
             if not scope:
@@ -241,29 +260,58 @@ class LineageGraph:
     def get_all_secrets_propagation_summary(self):
         """Get propagation summary for all secrets in the graph"""
         with self.driver.session() as session:
-            result = session.run(
-                """
-                MATCH (s:Secret)
-                OPTIONAL MATCH (s)-[:APPEARS_IN]->(f:File)
-                OPTIONAL MATCH (s)-[:USED_IN]->(st:Stage)
-                OPTIONAL MATCH (s)-[:APPEARS_IN_LOG]->(l:Log)
-                OPTIONAL MATCH (s)-[:APPEARS_IN_ARTIFACT]->(a:Artifact)
+            # First check what relationship types exist
+            rel_check = session.run("""
+                MATCH ()-[r]->()
+                RETURN DISTINCT type(r) as rel_type
+            """)
+            existing_rels = {rec['rel_type'] for rec in rel_check}
+            
+            # Build query based on existing relationships
+            query_parts = ["MATCH (s:Secret)"]
+            query_parts.append("OPTIONAL MATCH (s)-[:APPEARS_IN]->(f:File)")
+            
+            if 'USED_IN' in existing_rels:
+                query_parts.append("OPTIONAL MATCH (s)-[:USED_IN]->(st:Stage)")
+            if 'APPEARS_IN_LOG' in existing_rels:
+                query_parts.append("OPTIONAL MATCH (s)-[:APPEARS_IN_LOG]->(l:Log)")
+            if 'APPEARS_IN_ARTIFACT' in existing_rels:
+                query_parts.append("OPTIONAL MATCH (s)-[:APPEARS_IN_ARTIFACT]->(a:Artifact)")
+            
+            query_parts.append("""
                 RETURN 
                     s.value as secret_value,
                     s.type as secret_type,
                     count(DISTINCT f) as file_count,
-                    count(DISTINCT st) as stage_count,
-                    count(DISTINCT l) as log_count,
-                    count(DISTINCT a) as artifact_count
-                ORDER BY (count(DISTINCT f) + count(DISTINCT st) + count(DISTINCT l) + count(DISTINCT a)) DESC
+                    {} as stage_count,
+                    {} as log_count,
+                    {} as artifact_count
+                ORDER BY count(DISTINCT f) DESC
                 LIMIT 50
-                """
-            )
+            """.format(
+                "count(DISTINCT st)" if 'USED_IN' in existing_rels else "0",
+                "count(DISTINCT l)" if 'APPEARS_IN_LOG' in existing_rels else "0",
+                "count(DISTINCT a)" if 'APPEARS_IN_ARTIFACT' in existing_rels else "0"
+            ))
+            
+            result = session.run("\n".join(query_parts))
             return [dict(record) for record in result]
     
     def find_critical_propagation_chains(self):
         """Find secrets with critical propagation patterns (code -> pipeline -> logs/artifacts)"""
         with self.driver.session() as session:
+            # Check if required relationships exist for critical chains
+            rel_check = session.run("""
+                MATCH ()-[r]->()
+                RETURN DISTINCT type(r) as rel_type
+            """)
+            existing_rels = {rec['rel_type'] for rec in rel_check}
+            
+            # Only query if we have the necessary relationships for critical chains
+            if not ({'USED_IN', 'APPEARS_IN_LOG'}.issubset(existing_rels) or 
+                    {'USED_IN', 'APPEARS_IN_ARTIFACT'}.issubset(existing_rels)):
+                return []  # No critical chains possible without these relationships
+            
             result = session.run(
                 """
                 MATCH (s:Secret)-[:APPEARS_IN]->(f:File)
