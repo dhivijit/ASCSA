@@ -74,6 +74,13 @@ class ScanContext:
             if os.path.exists(default_config):
                 self.config_path = default_config
         
+        # Set default database paths if not provided
+        if not self.sdda_db_path:
+            self.sdda_db_path = os.path.join(self.repo_path, 'sdda.db')
+        
+        if not self.slga_db_path:
+            self.slga_db_path = os.path.join(self.repo_path, 'slga.db')
+        
         # Load Neo4j credentials from environment if not provided
         if not self.neo4j_uri:
             self.neo4j_uri = os.environ.get('NEO4J_URI')

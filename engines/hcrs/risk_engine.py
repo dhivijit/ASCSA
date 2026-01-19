@@ -1,6 +1,7 @@
 # HCRS risk engine - Updated comprehensive version
 from datetime import datetime
 from typing import List, Dict
+import math
 from .models import (
     FileRiskScore, RepositoryRiskScore, SecurityViolation, 
     Severity, ViolationType
@@ -42,7 +43,17 @@ def compute_file_risk_score(file_path: str, language: str, violations: List[Secu
 
 def compute_repository_risk_score(repo_path: str, file_scores: List[FileRiskScore]) -> RepositoryRiskScore:
     """Compute aggregate risk score for entire repository"""
-    total_score = sum(fs.total_score for fs in file_scores)
+    # Calculate raw total score before normalization
+    raw_total_score = sum(fs.total_score for fs in file_scores)
+    
+    # Normalize score to 0-100 range using logarithmic scaling
+    # Formula: min(100, 100 * log10(raw_score + 1) / 4)
+    # This caps the maximum normalized score at 100 while preserving risk differentiation
+    if raw_total_score > 0:
+        # Use logarithmic scaling: log base 10 of (score + 1), max out at 100
+        total_score = min(100, 100 * math.log10(raw_total_score + 1) / 4)
+    else:
+        total_score = 0
     
     # Aggregate statistics
     total_violations = sum(len(fs.violations) for fs in file_scores)
