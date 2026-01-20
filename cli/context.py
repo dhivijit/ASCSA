@@ -45,6 +45,10 @@ class ScanContext:
     output_file: Optional[str] = None
     verbose: bool = False
     reportout_dir: Optional[str] = None  # Directory for per-engine/main outputs
+    
+    # Cloud upload options
+    enable_upload: bool = False
+    upload_prefix: Optional[str] = None
 
     # Database configuration
     sdda_db_path: Optional[str] = None
@@ -164,6 +168,8 @@ def build_context(
     neo4j_user = kwargs.pop('neo4j_user', None)
     neo4j_pass = kwargs.pop('neo4j_pass', None)
     reportout_dir = kwargs.pop('reportout_dir', None)
+    enable_upload = kwargs.pop('enable_upload', False)
+    upload_prefix = kwargs.pop('upload_prefix', None)
 
     return ScanContext(
         repo_path=repo_path,
@@ -187,5 +193,7 @@ def build_context(
         neo4j_uri=neo4j_uri,
         neo4j_user=neo4j_user,
         neo4j_pass=neo4j_pass,
-        reportout_dir=reportout_dir
+        reportout_dir=reportout_dir,
+        enable_upload=enable_upload,
+        upload_prefix=upload_prefix
     )

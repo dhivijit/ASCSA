@@ -52,10 +52,10 @@ dev = [
 ascsa = "cli.main:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/ascsa-ci"
-Documentation = "https://github.com/yourusername/ascsa-ci#readme"
-Repository = "https://github.com/yourusername/ascsa-ci"
-Issues = "https://github.com/yourusername/ascsa-ci/issues"
+Homepage = "https://github.com/dhivijit/ascsa-ci"
+Documentation = "https://github.com/dhivijit/ascsa-ci#readme"
+Repository = "https://github.com/dhivijit/ascsa-ci"
+Issues = "https://github.com/dhivijit/ascsa-ci/issues"
 
 [tool.setuptools]
 packages = ["cli", "core", "engines", "engines.hcrs", "engines.sdda", "engines.slga", "output", "config"]

@@ -173,6 +173,20 @@ def parse_arguments():
         action='store_true',
         help='Suppress all output except errors'
     )
+    
+    # Cloud upload options
+    upload_group = parser.add_argument_group('cloud upload')
+    upload_group.add_argument(
+        '--upload',
+        action='store_true',
+        help='Upload reports to cloud storage (S3/R2)'
+    )
+    upload_group.add_argument(
+        '--upload-prefix',
+        type=str,
+        default=None,
+        help='Custom prefix for uploaded files (default: ascsa-reports/<run-id>/)'
+    )
 
     return parser.parse_args()
 
@@ -226,7 +240,9 @@ def main():
                 neo4j_uri=args.neo4j_uri,
                 neo4j_user=args.neo4j_user,
                 neo4j_pass=args.neo4j_pass,
-                reportout_dir=args.reportout
+                reportout_dir=args.reportout,
+                enable_upload=args.upload,
+                upload_prefix=args.upload_prefix
             )
         except ValueError as e:
             logger.error(f"Configuration error: {e}")

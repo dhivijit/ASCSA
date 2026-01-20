@@ -9,6 +9,7 @@ cryptography>=41.0.0
 requests
 colorama
 tree-sitter
+boto3
 
 # Optional: Tree-sitter for advanced AST analysis
 # Uncomment to enable tree-sitter support

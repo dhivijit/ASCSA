@@ -140,6 +140,10 @@ class PipelineOrchestrator:
         except Exception as e:
             logger.error(f"Failed to write main report: {e}")
 
+        # Upload reports to cloud storage if enabled
+        if self.context.enable_upload:
+            self._upload_reports(output_dir)
+
         logger.info(f"Scan complete. Recommendation: {self.results['recommendation']}")
 
         return self.results
@@ -690,6 +694,73 @@ class PipelineOrchestrator:
         else:
             self.results['recommendation'] = 'PASS'
             self.results['exit_code'] = exit_codes.SUCCESS
+    
+    def _upload_reports(self, report_dir: str):
+        """Upload generated reports to cloud storage."""
+        logger.info("=" * 80)
+        logger.info("Uploading reports to cloud storage")
+        logger.info("=" * 80)
+        
+        try:
+            from core.cloud_uploader import CloudUploader
+            
+            # Initialize uploader (will read from environment variables)
+            uploader = CloudUploader()
+            
+            # Upload all reports
+            results = uploader.upload_reports(
+                report_dir=report_dir,
+                run_id=self.context.run_id,
+                timestamp=self.context.timestamp,
+                prefix=self.context.upload_prefix
+            )
+            
+            # Log results
+            successful = sum(1 for v in results.values() if v)
+            total = len(results)
+            
+            if successful > 0:
+                logger.info(f"✓ Successfully uploaded {successful}/{total} report files")
+                
+                # Generate folder name for display
+                datetime_suffix = self.context.timestamp.strftime("%Y%m%d%H%M")
+                folder_name = f"{self.context.run_id}_{datetime_suffix}"
+                
+                # Add upload info to results
+                self.results['upload'] = {
+                    'success': True,
+                    'uploaded_files': successful,
+                    'total_files': total,
+                    'bucket': uploader.bucket_name,
+                    'folder': folder_name,
+                    'prefix': self.context.upload_prefix or folder_name
+                }
+            else:
+                logger.error("✗ No files were uploaded")
+                self.results['upload'] = {
+                    'success': False,
+                    'error': 'No files were uploaded'
+                }
+                
+        except ImportError as e:
+            logger.error(f"Cloud upload failed: boto3 not installed. Install with: pip install boto3")
+            self.results['upload'] = {
+                'success': False,
+                'error': 'boto3 not installed'
+            }
+        except ValueError as e:
+            logger.error(f"Cloud upload configuration error: {e}")
+            logger.info("Set environment variables: R2_BUCKET_NAME/S3_BUCKET_NAME, R2_ACCESS_KEY_ID/AWS_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY/AWS_SECRET_ACCESS_KEY")
+            self.results['upload'] = {
+                'success': False,
+                'error': str(e)
+            }
+        except Exception as e:
+            logger.error(f"Cloud upload failed: {e}", exc_info=True)
+            self.results['upload'] = {
+                'success': False,
+                'error': str(e)
+            }
 
 
 def run_pipeline(context: ScanContext) -> Dict[str, Any]:
