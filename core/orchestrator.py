@@ -724,7 +724,7 @@ class PipelineOrchestrator:
                 
                 # Generate folder name for display
                 datetime_suffix = self.context.timestamp.strftime("%Y%m%d%H%M")
-                folder_name = f"{self.context.run_id}_{datetime_suffix}"
+                folder_name = f"{datetime_suffix}_{self.context.run_id}"
                 
                 # Log access URL with run_id
                 logger.info(f"Access ASCSA output files at https://ascsa.dhivijit.dev/run/{folder_name}")
