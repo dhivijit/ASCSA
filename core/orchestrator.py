@@ -726,6 +726,9 @@ class PipelineOrchestrator:
                 datetime_suffix = self.context.timestamp.strftime("%Y%m%d%H%M")
                 folder_name = f"{self.context.run_id}_{datetime_suffix}"
                 
+                # Log access URL with run_id
+                logger.info(f"Access ASCSA output files at https://ascsa.dhivijit.dev/run/{folder_name}")
+                
                 # Add upload info to results
                 self.results['upload'] = {
                     'success': True,
