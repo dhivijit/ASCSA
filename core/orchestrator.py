@@ -161,6 +161,14 @@ class PipelineOrchestrator:
             # Determine database path
             slga_db_path = getattr(self.context, 'slga_db_path', None) or 'slga.db'
             
+            # Get commit scanning parameters from context (with defaults)
+            scan_commits = getattr(self.context, 'slga_scan_commits', True)
+            max_commits = getattr(self.context, 'slga_max_commits', 100)
+            
+            logger.info(f"SLGA: Commit scanning {'enabled' if scan_commits else 'disabled'}")
+            if scan_commits:
+                logger.info(f"SLGA: Will scan up to {max_commits} commits")
+            
             # Run SLGA with storage enabled
             result = run_slga(
                 repo_path=self.context.repo_path,
@@ -169,7 +177,9 @@ class PipelineOrchestrator:
                 artifact_dir=self.context.artifact_dir,
                 db_path=slga_db_path,
                 scan_id=self.context.run_id,
-                store_to_db=True
+                store_to_db=True,
+                scan_commits=scan_commits,
+                max_commits=max_commits
             )
             
             # Unpack results (supports both old and new return format)
@@ -183,11 +193,20 @@ class PipelineOrchestrator:
             total_secrets = len(secrets)
             total_files = len(set(f for s in secrets for f in s.files))
             total_commits = len(set(c for s in secrets for c in s.commits))
+            
+            # Categorize secrets by source
+            file_secrets = [s for s in secrets if s.files]
+            commit_secrets = [s for s in secrets if s.secret_type == "commit_history"]
 
             self.results['slga'] = {
                 'total_secrets': total_secrets,
+                'secrets_from_files': len(file_secrets),
+                'secrets_from_commits': len(commit_secrets),
                 'total_files': total_files,
                 'total_commits': total_commits,
+                'commit_scanning_enabled': scan_commits,
+                'max_commits_scanned': max_commits if scan_commits else 0,
+                'commits_with_secrets': len([s for s in secrets if s.commits]),
                 'graph_nodes': getattr(graph, 'node_count', 0) if graph else 0,
                 'graph_edges': getattr(graph, 'edge_count', 0) if graph else 0,
                 'database_path': db_path,
@@ -218,7 +237,10 @@ class PipelineOrchestrator:
                 except Exception as e:
                     logger.error(f"Failed to save propagation analysis: {e}")
 
-            logger.info(f"SLGA: Found {total_secrets} secrets across {total_files} files")
+            logger.info(f"SLGA: Found {total_secrets} secrets total")
+            logger.info(f"SLGA:   - Current files: {len(file_secrets)} secrets in {total_files} files")
+            logger.info(f"SLGA:   - Commit history: {len(commit_secrets)} secrets from git commits")
+            logger.info(f"SLGA:   - Total commits analyzed: {total_commits}")
             logger.info(f"SLGA: Data stored in database: {db_path}")
             
             # Generate and save text report

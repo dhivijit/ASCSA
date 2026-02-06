@@ -72,6 +72,15 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None,
             for file in secret.files:
                 if file not in file_to_commits:
                     file_to_commits[file] = get_commits_for_file(repo_path, file, fetch_content=True)
+        
+        # Populate secret.commits field with commit hashes from file history
+        for secret in secrets:
+            commit_hashes = set()
+            for file in secret.files:
+                if file in file_to_commits:
+                    for commit in file_to_commits[file]:
+                        commit_hashes.add(commit.hash)
+            secret.commits = list(commit_hashes)
                     
         logger.info(f"Found {len(commit_secrets)} additional secrets in commit history")
     else:
@@ -80,6 +89,15 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None,
             for file in secret.files:
                 if file not in file_to_commits:
                     file_to_commits[file] = get_commits_for_file(repo_path, file, fetch_content=False)
+        
+        # Populate secret.commits field even without content scanning
+        for secret in secrets:
+            commit_hashes = set()
+            for file in secret.files:
+                if file in file_to_commits:
+                    for commit in file_to_commits[file]:
+                        commit_hashes.add(commit.hash)
+            secret.commits = list(commit_hashes)
     
     # Combine file-based and commit-based secrets
     all_secrets = secrets + commit_secrets
@@ -216,4 +234,4 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None,
     else:
         logger.warning("Neo4j credentials not found (NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD). Skipping graph creation. Using SQLite-only storage.")
     
-    return graph, secrets, db_path if store_to_db else None, propagation_analysis
+    return graph, all_secrets, db_path if store_to_db else None, propagation_analysis

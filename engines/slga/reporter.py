@@ -124,21 +124,62 @@ class SLGAReporter:
             lines.append(f"Generated: {datetime.now().isoformat()}")
             lines.append("")
             lines.append(f"Total Secrets Found: {len(secrets)}")
+            
+            # Categorize secrets by source
+            file_secrets = [s for s in secrets if s.files]
+            commit_secrets = [s for s in secrets if s.secret_type == "commit_history"]
+            
+            lines.append(f"  - From current files: {len(file_secrets)}")
+            lines.append(f"  - From commit history: {len(commit_secrets)}")
             lines.append("")
             
-            for idx, secret in enumerate(secrets, 1):
-                lines.append(f"\n{idx}. Secret Details:")
-                lines.append(f"   Type: {secret.secret_type}")
-                lines.append(f"   Entropy: {secret.entropy:.2f}")
-                lines.append(f"   Files: {len(secret.files)}")
-                lines.append(f"   Commits: {len(secret.commits)}")
+            # Show commit-based secrets first (historical findings)
+            if commit_secrets:
+                lines.append("\n" + "=" * 80)
+                lines.append("SECRETS FOUND IN GIT COMMIT HISTORY")
+                lines.append("=" * 80)
+                lines.append("These secrets were found in git commit diffs (may have been removed from current files)")
+                lines.append("")
                 
-                if secret.files:
-                    lines.append(f"   File Locations:")
-                    for file_path in secret.files[:5]:  # Show first 5
-                        lines.append(f"     - {file_path}")
-                    if len(secret.files) > 5:
-                        lines.append(f"     ... and {len(secret.files) - 5} more")
+                for idx, secret in enumerate(commit_secrets, 1):
+                    lines.append(f"\n{idx}. Commit-Based Secret:")
+                    lines.append(f"   Value: {secret.value[:40]}...")
+                    lines.append(f"   Type: {secret.secret_type}")
+                    lines.append(f"   Entropy: {secret.entropy:.2f}")
+                    lines.append(f"   Found in {len(secret.commits)} commit(s):")
+                    for commit_hash in secret.commits[:5]:  # Show first 5
+                        lines.append(f"     - Commit: {commit_hash[:8]}")
+                    if len(secret.commits) > 5:
+                        lines.append(f"     ... and {len(secret.commits) - 5} more commits")
+            
+            # Show file-based secrets
+            if file_secrets:
+                lines.append("\n" + "=" * 80)
+                lines.append("SECRETS IN CURRENT FILES")
+                lines.append("=" * 80)
+                lines.append("")
+                
+                for idx, secret in enumerate(file_secrets, 1):
+                    lines.append(f"\n{idx}. File-Based Secret:")
+                    lines.append(f"   Value: {secret.value[:40]}...")
+                    lines.append(f"   Type: {secret.secret_type}")
+                    lines.append(f"   Entropy: {secret.entropy:.2f}")
+                    lines.append(f"   Files: {len(secret.files)}")
+                    
+                    if secret.files:
+                        lines.append(f"   File Locations:")
+                        for file_path, line_num in zip(secret.files[:5], secret.lines[:5]):  # Show first 5
+                            lines.append(f"     - {file_path}:{line_num}")
+                        if len(secret.files) > 5:
+                            lines.append(f"     ... and {len(secret.files) - 5} more")
+                    
+                    # Show commit history for this secret
+                    if secret.commits:
+                        lines.append(f"   Commit History: {len(secret.commits)} commit(s)")
+                        for commit_hash in secret.commits[:3]:  # Show first 3
+                            lines.append(f"     - {commit_hash[:8]}")
+                        if len(secret.commits) > 3:
+                            lines.append(f"     ... and {len(secret.commits) - 3} more")
             
             lines.append("\n" + "=" * 80)
             return "\n".join(lines)
@@ -173,19 +214,44 @@ class SLGAReporter:
     def generate_json_report(self, secrets: List[Secret] = None) -> str:
         """Generate JSON report"""
         if secrets:
+            # Categorize secrets
+            file_secrets = [s for s in secrets if s.files]
+            commit_secrets = [s for s in secrets if s.secret_type == "commit_history"]
+            
             report = {
                 'generated_at': datetime.now().isoformat(),
                 'total_secrets': len(secrets),
-                'secrets': [
+                'secrets_from_files': len(file_secrets),
+                'secrets_from_commits': len(commit_secrets),
+                'summary': {
+                    'total_files_with_secrets': len(set(f for s in secrets for f in s.files)),
+                    'total_commits_analyzed': len(set(c for s in secrets for c in s.commits))
+                },
+                'commit_based_secrets': [
+                    {
+                        'value_preview': s.value[:40] + '...' if len(s.value) > 40 else s.value,
+                        'value_hash': f"sha256_{hash(s.value) % 1000000:06d}",
+                        'type': s.secret_type,
+                        'entropy': round(s.entropy, 2),
+                        'commits': s.commits[:10],  # First 10 commits
+                        'total_commits': len(s.commits)
+                    }
+                    for s in commit_secrets
+                ],
+                'file_based_secrets': [
                     {
                         'value_hash': f"sha256_{hash(s.value) % 1000000:06d}",  # Anonymized
                         'type': s.secret_type,
-                        'entropy': s.entropy,
+                        'entropy': round(s.entropy, 2),
                         'files_count': len(s.files),
                         'commits_count': len(s.commits),
-                        'files': s.files[:10],  # Limit to first 10
+                        'files': [
+                            {'path': f, 'line': l} 
+                            for f, l in zip(s.files[:10], s.lines[:10])
+                        ],  # Limit to first 10
+                        'commits': s.commits[:5] if s.commits else []  # First 5 commits
                     }
-                    for s in secrets
+                    for s in file_secrets
                 ]
             }
         else:
