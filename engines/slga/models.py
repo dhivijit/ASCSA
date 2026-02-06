@@ -23,6 +23,9 @@ class Commit:
 	message: Optional[str] = None
 	author: Optional[str] = None
 	date: Optional[str] = None
+	diff: Optional[str] = None
+	changed_files: List[str] = field(default_factory=list)
+	secrets_found: List[str] = field(default_factory=list)
 
 @dataclass
 class Stage:

@@ -85,6 +85,9 @@ ascsa . --skip-slga --skip-sdda --quiet
 # Export results to JSON
 ascsa . --skip-slga --skip-sdda --format json --output results.json
 
+# Upload reports to cloud storage (S3/R2)
+ascsa . --upload
+
 # Scan only changed files (PR mode)
 ascsa . --changed-files src/app.py src/utils.py
 
@@ -258,6 +261,12 @@ fi
 export NEO4J_URI="bolt://localhost:7687"
 export NEO4J_USER="neo4j"
 export NEO4J_PASS="password"
+
+# Cloud Upload (optional, for S3/R2 integration)
+export R2_BUCKET_NAME="my-ascsa-reports"
+export R2_ACCESS_KEY_ID="your_access_key"
+export R2_SECRET_ACCESS_KEY="your_secret_key"
+export R2_ENDPOINT_URL="https://account-id.r2.cloudflarestorage.com"
 ```
 
 ### Config Files
