@@ -6,7 +6,7 @@ sdda:
   baseline_window_days: 30  # 7 for fast-moving teams, 90 for legacy repos
   
   # Minimum samples required to establish baseline
-  min_samples: 20
+  min_samples: 2
   
   # Z-score threshold for anomaly detection
   zscore_threshold: 3.0  # Standard: 3.0 (99.7%), Sensitive: 2.5, Strict: 2.0

@@ -325,57 +325,54 @@ class PipelineOrchestrator:
             return SecretLineage(secrets=[])
     
     def _run_sdda(self, slga_result) -> Any:
-        """Execute Secret Drift Detection Analysis."""
+        """Execute Secret Drift Detection Analysis (git-diff mode).
+
+        Compares the current HEAD secret snapshot against HEAD~1 using
+        git blob scanning — no persistent database required, making it
+        fully compatible with stateless CI/CD environments.
+        """
         logger.info("=" * 80)
-        logger.info("Phase 2: Secret Drift Detection Analysis (SDDA)")
+        logger.info("Phase 2: Secret Drift Detection Analysis (SDDA — git-diff mode)")
         logger.info("=" * 80)
-        
+
         try:
-            from engines.sdda.run import run_sdda
-            from engines.sdda.models import PipelineRun, SecretUsage
-            from engines.sdda.database import SDDADatabase
-            
-            # Build PipelineRun from context
-            pipeline_run = PipelineRun(
+            from engines.sdda.run import run_sdda_git_diff
+
+            # Current secrets come directly from the SLGA result
+            current_secrets = []
+            if hasattr(slga_result, 'secrets'):
+                current_secrets = [
+                    s for s in slga_result.secrets
+                    if s.files and s.secret_type != "commit_history"
+                ]
+
+            # Get HEAD~1 secret snapshot from git
+            previous_secrets = self._get_previous_secrets()
+
+            if previous_secrets is None:
+                logger.info("SDDA: No previous commit available — skipping drift detection")
+                self.results['sdda'] = {
+                    'total_secrets_analyzed': len(current_secrets),
+                    'drifted_secrets': [],
+                    'summary': {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0},
+                    'baseline_status': 'NO_PREVIOUS_COMMIT (first commit or detached HEAD)',
+                    'mode': 'git_diff',
+                    'database_path': None,
+                }
+                return None
+
+            logger.info(
+                f"SDDA: Comparing {len(current_secrets)} current secrets "
+                f"against {len(previous_secrets)} at HEAD~1"
+            )
+
+            result = run_sdda_git_diff(
+                current_secrets=current_secrets,
+                previous_secrets=previous_secrets,
                 run_id=self.context.run_id,
                 timestamp=self.context.timestamp,
-                branch=self.context.branch,
-                environment=self.context.environment,
-                actor=self.context.actor
             )
-            
-            # Extract secret usages from SLGA results
-            secret_usages = []
-            if hasattr(slga_result, 'secrets'):
-                import hashlib
-                for secret in slga_result.secrets:
-                    # Hash the secret value to create a valid secret_id
-                    # that conforms to InputValidator.SECRET_ID_PATTERN: ^[a-zA-Z0-9_\-\.]{1,255}$
-                    secret_hash = hashlib.sha256(secret.value.encode()).hexdigest()[:16]
-                    secret_id = f"secret_{secret_hash}"
-                    
-                    usage = SecretUsage(
-                        secret_id=secret_id,
-                        run_id=self.context.run_id,
-                        timestamp=self.context.timestamp,
-                        stages=set(),
-                        access_count=len(secret.files),
-                        actor=self.context.actor,
-                        environment=self.context.environment,
-                        branch=self.context.branch
-                    )
-                    secret_usages.append(usage)
-            
-            # Run SDDA with storage enabled
-            result = run_sdda(
-                pipeline_run=pipeline_run,
-                secret_usages=secret_usages,
-                config_path=self.context.config_path,
-                db_path=self.context.sdda_db_path,
-                store_report=True
-            )
-            
-            # Extract summary
+
             self.results['sdda'] = {
                 'total_secrets_analyzed': result.total_secrets_analyzed,
                 'drifted_secrets': [
@@ -383,45 +380,42 @@ class PipelineOrchestrator:
                         'secret_id': d.secret_id,
                         'severity': d.severity,
                         'drift_score': d.total_drift_score,
-                        'details': d.anomaly_details
+                        'drift_type': getattr(d, 'drift_type', 'UNKNOWN'),
+                        'details': d.anomaly_details,
                     }
                     for d in result.drifted_secrets
                 ],
                 'summary': result.summary,
                 'baseline_status': result.baseline_status,
-                'database_path': self.context.sdda_db_path
+                'mode': 'git_diff',
+                'database_path': None,
             }
-            
-            logger.info(f"SDDA: Analyzed {result.total_secrets_analyzed} secrets, found {len(result.drifted_secrets)} drifts")
-            logger.info(f"SDDA: Data stored in database: {self.context.sdda_db_path}")
-            
-            # Generate additional reports
+
+            logger.info(
+                f"SDDA: Analyzed {result.total_secrets_analyzed} secrets, "
+                f"found {len(result.drifted_secrets)} drift event(s)"
+            )
+
+            # Write sdda_stats.json (summary only — no DB in git-diff mode)
             try:
                 output_dir = self.context.reportout_dir or self.context.repo_path
-                
-                # Get database statistics
-                db = SDDADatabase(self.context.sdda_db_path)
-                stats = db.get_statistics()
-                drift_history = db.get_drift_history(limit=10)
-                db.close()
-                
-                # Generate stats report
                 stats_report = {
                     'generated_at': datetime.now().isoformat(),
-                    'database_statistics': stats,
-                    'recent_drift_history': drift_history
+                    'mode': 'git_diff',
+                    'drift_summary': result.summary,
+                    'total_secrets_analyzed': result.total_secrets_analyzed,
+                    'total_drift_events': len(result.drifted_secrets),
+                    'baseline_status': result.baseline_status,
                 }
-                
                 sdda_stats_path = os.path.join(output_dir, "sdda_stats.json")
                 with open(sdda_stats_path, "w", encoding="utf-8") as f:
                     json.dump(stats_report, f, indent=2, default=str)
                 logger.info(f"SDDA statistics report saved to {sdda_stats_path}")
-                
             except Exception as e:
                 logger.error(f"Failed to generate SDDA statistics: {e}", exc_info=True)
-            
+
             return result
-            
+
         except ImportError as e:
             logger.error(f"SDDA: Engine import failed: {e}")
             self.results['sdda_skipped'] = True
@@ -429,6 +423,37 @@ class PipelineOrchestrator:
         except Exception as e:
             logger.error(f"SDDA: Execution failed: {e}", exc_info=True)
             self.results['sdda_skipped'] = True
+            return None
+
+    def _get_previous_secrets(self):
+        """Scan the git tree at HEAD~1 and return its secret snapshot.
+
+        Uses GitPython to read file blobs directly from the git object store
+        without touching the working tree. Returns None if HEAD~1 does not
+        exist (first commit, shallow clone, or detached HEAD with no parent).
+        """
+        try:
+            from git import Repo
+            from engines.sdda.git_drift_detector import scan_tree_for_secrets
+
+            repo = Repo(self.context.repo_path)
+            head_commit = repo.head.commit
+
+            if not head_commit.parents:
+                logger.info("SDDA: Repository has only one commit — no HEAD~1 available")
+                return None
+
+            previous_commit = head_commit.parents[0]
+            logger.info(
+                f"SDDA: Scanning HEAD~1 ({previous_commit.hexsha[:8]}) "
+                "for previous secret snapshot"
+            )
+            previous_secrets = scan_tree_for_secrets(repo, previous_commit)
+            logger.info(f"SDDA: Found {len(previous_secrets)} secrets at HEAD~1")
+            return previous_secrets
+
+        except Exception as exc:
+            logger.warning(f"SDDA: Could not retrieve HEAD~1 snapshot: {exc}")
             return None
     
     def _run_hcrs(self, slga_result=None, sdda_result=None) -> Any:
@@ -853,11 +878,17 @@ class PipelineOrchestrator:
             lines.append("-" * 72)
             for d in drifted:
                 lines.append(f"  Secret:   {d.secret_id}")
+                drift_type = getattr(d, 'drift_type', None)
+                if drift_type:
+                    lines.append(f"  Type:     {drift_type}")
                 lines.append(f"  Severity: {d.severity}")
                 lines.append(f"  Score:    {d.total_drift_score:.4f}")
                 if d.anomaly_details:
                     for dim, detail in d.anomaly_details.items():
-                        lines.append(f"    {dim}: {detail}")
+                        detail_str = ', '.join(str(x) for x in detail) if isinstance(detail, list) else str(detail)
+                        lines.append(f"    {dim}: {detail_str}")
+                if getattr(d, 'recommendation', ''):
+                    lines.append(f"  Action:   {d.recommendation}")
                 lines.append("")
         else:
             lines.append("No behavioral drift detected.")

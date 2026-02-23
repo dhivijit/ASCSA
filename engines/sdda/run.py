@@ -128,6 +128,55 @@ def run_sdda(pipeline_run: PipelineRun,
 
     return report
 
+def run_sdda_git_diff(
+    current_secrets,
+    previous_secrets,
+    run_id: str,
+    timestamp,
+) -> DriftReport:
+    """
+    Stateless SDDA using git-snapshot diff comparison.
+
+    Compares SLGA secrets at the current HEAD against HEAD~1 to detect
+    ADDED, REMOVED, and MOVED secrets without a persistent database.
+    Suitable for CI/CD pipelines where sdda.db is ephemeral or absent.
+
+    Args:
+        current_secrets: List[Secret] from the current HEAD SLGA scan.
+        previous_secrets: List[Secret] from the HEAD~1 SLGA scan.
+        run_id: Unique identifier for the current pipeline run.
+        timestamp: Datetime of the current run.
+
+    Returns:
+        DriftReport with detected drift events and baseline_status.
+    """
+    from .git_drift_detector import diff_snapshots
+
+    detections = diff_snapshots(current_secrets, previous_secrets, run_id, timestamp)
+
+    severity_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for d in detections:
+        severity_counts[d.severity] = severity_counts.get(d.severity, 0) + 1
+
+    total_current = len(
+        {s.value for s in current_secrets if s.files and s.secret_type != "commit_history"}
+    )
+
+    if detections:
+        baseline_status = f"DRIFT_DETECTED ({len(detections)} change(s) vs HEAD~1)"
+    else:
+        baseline_status = f"OK (no secret drift vs HEAD~1, {total_current} secret(s) stable)"
+
+    return DriftReport(
+        run_id=run_id,
+        timestamp=timestamp,
+        total_secrets_analyzed=total_current,
+        drifted_secrets=detections,
+        summary=severity_counts,
+        baseline_status=baseline_status,
+    )
+
+
 def rebuild_baselines(config_path: str = None, db_path: str = None) -> int:
     """
     Rebuild all baselines from historical data.
