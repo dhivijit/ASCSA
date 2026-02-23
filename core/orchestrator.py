@@ -207,7 +207,9 @@ class PipelineOrchestrator:
             # Extract summary
             total_secrets = len(secrets)
             total_files = len(set(f for s in secrets for f in s.files))
-            total_commits = len(set(c for s in secrets for c in s.commits))
+            total_commits = scan_stats.get('commits_scanned', 0) if scan_stats else 0
+            if not total_commits:
+                total_commits = len(set(c for s in secrets for c in s.commits))
             
             # Categorize secrets by source
             file_secrets = [s for s in secrets if s.files]
