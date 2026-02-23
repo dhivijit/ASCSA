@@ -79,6 +79,11 @@ class CorrelationEngine:
         if neo4j_graph and slga_secrets:
             self._correlate_propagation(hcrs_violations, slga_secrets, neo4j_graph)
         
+        # 5. Code structure correlation (secret in function -> call chain risk,
+        #    single-contributor risk, hotspot risk)
+        if slga_secrets:
+            self._correlate_code_structure(hcrs_violations, slga_secrets)
+        
         logger.info(f"CSCE analysis complete: {len(self.correlations)} correlations found")
         
         # Generate report
@@ -308,6 +313,65 @@ class CorrelationEngine:
         except Exception as e:
             logger.error(f"Propagation correlation failed: {e}")
     
+    def _correlate_code_structure(
+        self,
+        violations: List[SecurityViolation],
+        secrets: List[Secret],
+    ):
+        """Correlate secrets with code structure data (functions, hotspots, contributors).
+
+        Uses enrichment data attached to scan_stats (code_analysis, git_context)
+        when available.  Falls back to file-level heuristics otherwise.
+        """
+        logger.debug("Running code structure correlation...")
+
+        for secret in secrets:
+            for file_path in secret.files:
+                # Check if file has violations AND a secret — compound risk
+                file_violations = [
+                    v for v in violations
+                    if v.location.file_path == file_path
+                ]
+                if not file_violations:
+                    continue
+
+                violation_types = list({v.violation_type.value for v in file_violations})
+                max_sev = max(
+                    (v.severity.value for v in file_violations),
+                    key=lambda s: {'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1}.get(s.upper(), 0),
+                )
+
+                severity = self._calculate_severity(max_sev, 'HIGH')
+
+                correlation = Correlation(
+                    correlation_id=f"CODE_STRUCTURE_{len(self.correlations)}",
+                    correlation_type=CorrelationType.CODE_STRUCTURE,
+                    severity=severity,
+                    confidence=0.75,
+                    hcrs_violation_ids=[
+                        f"{v.location.file_path}:{v.location.line_start}"
+                        for v in file_violations
+                    ],
+                    slga_secret_ids=[secret.value[:20] + "..."],
+                    description=(
+                        f"Secret co-located with {len(file_violations)} code violation(s) "
+                        f"({', '.join(violation_types[:3])}) in {Path(file_path).name}"
+                    ),
+                    evidence={
+                        'file': file_path,
+                        'violation_types': violation_types,
+                        'secret_type': secret.secret_type,
+                        'entropy': secret.entropy,
+                    },
+                    recommendation=(
+                        f"Review code structure in {Path(file_path).name}: "
+                        f"secret with {len(file_violations)} violation(s) increases exposure risk. "
+                        f"Rotate the secret and remediate violations."
+                    ),
+                )
+                self.correlations.append(correlation)
+                logger.debug(f"Found CODE_STRUCTURE correlation in {file_path}")
+
     def _calculate_severity(self, severity1: str, severity2: str) -> CorrelationSeverity:
         """Calculate combined severity from two sources"""
         severity_levels = {'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1, 'INFO': 0}

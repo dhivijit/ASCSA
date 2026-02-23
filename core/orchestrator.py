@@ -277,6 +277,11 @@ class PipelineOrchestrator:
             # Add scan_stats to results if available
             if scan_stats:
                 self.results['slga']['scan_stats'] = scan_stats
+                # Surface code analysis and git context at top level for downstream use
+                if scan_stats.get('code_analysis'):
+                    self.results['slga']['code_analysis'] = scan_stats['code_analysis']
+                if scan_stats.get('git_context'):
+                    self.results['slga']['git_context'] = scan_stats['git_context']
 
             # Generate and save text report
             try:
@@ -748,6 +753,19 @@ class PipelineOrchestrator:
                 finding_bullets.append(f"SLGA detected {n} hardcoded secret(s) across {slga.get('total_files', 0)} file(s).")
             else:
                 finding_bullets.append("SLGA: No hardcoded secrets detected.")
+            ca = slga.get('code_analysis')
+            if ca:
+                finding_bullets.append(
+                    f"SLGA code analysis: {ca.get('total_functions', 0)} functions, "
+                    f"{ca.get('total_classes', 0)} classes across {ca.get('files_parsed', 0)} files "
+                    f"({', '.join(ca.get('languages', []))})."
+                )
+            gc = slga.get('git_context')
+            if gc:
+                finding_bullets.append(
+                    f"SLGA git context: {gc.get('total_contributors', 0)} contributor(s), "
+                    f"{gc.get('hotspot_count', 0)} file hotspot(s)."
+                )
 
         hcrs = self.results.get('hcrs')
         if hcrs:

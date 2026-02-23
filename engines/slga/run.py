@@ -24,7 +24,8 @@ from .reporter import SLGAReporter
 logger = logging.getLogger(__name__)
 
 def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None, 
-             db_path=None, scan_id=None, store_to_db=True, scan_commits=True, max_commits=100):
+             db_path=None, scan_id=None, store_to_db=True, scan_commits=True, max_commits=100,
+             enable_code_analysis=True):
     """Main entry for Secret Lineage Graph Construction.
 
     Scans repo, pipeline config, logs, and artifacts; builds graph in Neo4j
@@ -40,6 +41,8 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None,
         store_to_db: Whether to store results in database (default: True).
         scan_commits: Whether to fetch and scan commit content (default: True).
         max_commits: Maximum commits to scan when scan_commits=True (default: 100).
+        enable_code_analysis: Whether to run tree-sitter code symbol analysis (default: True).
+            No-op when tree-sitter is not installed.
 
     Returns:
         Tuple of (LineageGraph, secrets, db_path, propagation_analysis, scan_stats)
@@ -194,12 +197,74 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None,
     neo4j_uri = os.environ.get('NEO4J_URI')
     neo4j_user = os.environ.get('NEO4J_USER')
     neo4j_pass = os.environ.get('NEO4J_PASSWORD')
+
+    # --- Code symbol analysis (tree-sitter) & git context (GitPython) ---
+    code_analysis = None
+    git_context = None
+
+    if enable_code_analysis:
+        try:
+            from .code_parser import CodeParser
+            parser = CodeParser()
+            code_analysis = parser.parse_directory(repo_path)
+            if code_analysis:
+                total_functions = sum(s.function_count for s in code_analysis)
+                total_classes = sum(s.class_count for s in code_analysis)
+                total_variables = sum(s.variable_count for s in code_analysis)
+                total_imports = sum(s.import_count for s in code_analysis)
+                total_call_edges = sum(len(s.call_edges) for s in code_analysis)
+                logger.info(
+                    f"Code analysis: {len(code_analysis)} files parsed — "
+                    f"{total_functions} functions, {total_classes} classes, "
+                    f"{total_imports} imports, {total_call_edges} call edges"
+                )
+                scan_stats['code_analysis'] = {
+                    'files_parsed': len(code_analysis),
+                    'total_functions': total_functions,
+                    'total_classes': total_classes,
+                    'total_variables': total_variables,
+                    'total_imports': total_imports,
+                    'total_call_edges': total_call_edges,
+                    'languages': list({s.language for s in code_analysis}),
+                }
+            else:
+                logger.info("Code analysis: no parseable files found (tree-sitter grammars may not be installed)")
+                scan_stats['code_analysis'] = None
+        except Exception as e:
+            logger.warning(f"Code analysis failed: {e}")
+            scan_stats['code_analysis'] = None
+
+        try:
+            from .git_context import GitContextAnalyzer
+            git_analyzer = GitContextAnalyzer(repo_path)
+            git_context = git_analyzer.analyze_repository(max_files=200, max_commits=max_commits)
+            if git_context:
+                logger.info(
+                    f"Git context: {git_context['total_commits']} commits, "
+                    f"{len(git_context['contributors'])} contributors, "
+                    f"{len(git_context['hotspots'])} hotspot(s)"
+                )
+                scan_stats['git_context'] = {
+                    'total_commits': git_context['total_commits'],
+                    'total_contributors': len(git_context['contributors']),
+                    'total_files_analyzed': git_context['total_files_analyzed'],
+                    'hotspot_count': len(git_context['hotspots']),
+                    'contributors': [
+                        {'name': c.name, 'email': c.email, 'commits': c.commits_count}
+                        for c in git_context['contributors']
+                    ],
+                    'hotspots': [h.file_path for h in git_context['hotspots']],
+                }
+        except Exception as e:
+            logger.warning(f"Git context analysis failed: {e}")
+            scan_stats['git_context'] = None
     
     if neo4j_uri and neo4j_user and neo4j_pass:
         try:
             graph = build_lineage_graph(
                 all_secrets, file_to_commits, neo4j_uri, neo4j_user, neo4j_pass,
-                stages=stages, logs=logs, artifacts=artifacts
+                stages=stages, logs=logs, artifacts=artifacts,
+                code_analysis=code_analysis, git_context=git_context,
             )
             logger.info("Neo4j graph successfully created with lineage data")
             

@@ -85,6 +85,16 @@ class ResultEmitter:
             lines.append(f"  Secrets Detected: {slga.get('total_secrets', 0)}")
             lines.append(f"  Files Affected: {slga.get('total_files', 0)}")
             lines.append(f"  Commits Analyzed: {slga.get('total_commits', 0)}")
+            ca = slga.get('code_analysis')
+            if ca:
+                lines.append(f"  Code Analysis: {ca.get('total_functions', 0)} functions, "
+                             f"{ca.get('total_classes', 0)} classes, "
+                             f"{ca.get('total_imports', 0)} imports "
+                             f"({', '.join(ca.get('languages', []))})")
+            gc = slga.get('git_context')
+            if gc:
+                lines.append(f"  Git Context: {gc.get('total_contributors', 0)} contributor(s), "
+                             f"{gc.get('hotspot_count', 0)} hotspot(s)")
         elif results.get('slga_skipped'):
             lines.append(f"\n{Fore.YELLOW}SLGA: Skipped{Style.RESET_ALL}")
         

@@ -185,6 +185,39 @@ class SLGAReporter:
                 lines.append("The repository appears clean from a secret-leakage perspective.")
                 lines.append("")
 
+            # --- Code Structure Analysis Section ---
+            if scan_stats and scan_stats.get('code_analysis'):
+                ca = scan_stats['code_analysis']
+                lines.append("CODE STRUCTURE ANALYSIS:")
+                lines.append(f"  Files parsed: {ca.get('files_parsed', 0)}")
+                lines.append(f"  Languages: {', '.join(ca.get('languages', []))}")
+                lines.append(f"  Functions: {ca.get('total_functions', 0)}")
+                lines.append(f"  Classes: {ca.get('total_classes', 0)}")
+                lines.append(f"  Variables: {ca.get('total_variables', 0)}")
+                lines.append(f"  Imports: {ca.get('total_imports', 0)}")
+                lines.append(f"  Call graph edges: {ca.get('total_call_edges', 0)}")
+                lines.append("")
+
+            # --- Git Context Section ---
+            if scan_stats and scan_stats.get('git_context'):
+                gc = scan_stats['git_context']
+                lines.append("GIT CONTRIBUTORS:")
+                lines.append(f"  Total commits analyzed: {gc.get('total_commits', 0)}")
+                lines.append(f"  Contributors: {gc.get('total_contributors', 0)}")
+                lines.append(f"  Files with git context: {gc.get('total_files_analyzed', 0)}")
+                contribs = gc.get('contributors', [])
+                if contribs:
+                    lines.append("  Top contributors:")
+                    for c in sorted(contribs, key=lambda x: -x.get('commits', 0))[:5]:
+                        lines.append(f"    {c['name']} ({c.get('email', '')}): {c.get('commits', 0)} commit(s)")
+                hotspots = gc.get('hotspots', [])
+                if hotspots:
+                    lines.append(f"\n  FILE HOTSPOTS ({len(hotspots)}):")
+                    lines.append("  (Files with high change frequency and multiple contributors)")
+                    for hp in hotspots[:10]:
+                        lines.append(f"    - {hp}")
+                lines.append("")
+
             if commit_secrets:
                 lines.append("\n" + "=" * 80)
                 lines.append("SECRETS FOUND IN GIT COMMIT HISTORY")
@@ -281,6 +314,8 @@ class SLGAReporter:
                 'total_secrets': len(secrets),
                 'secrets_from_files': len(file_secrets),
                 'secrets_from_commits': len(commit_secrets),
+                'code_analysis': (scan_stats or {}).get('code_analysis'),
+                'git_context': (scan_stats or {}).get('git_context'),
                 'summary': {
                     'total_files_with_secrets': len(set(f for s in secrets for f in s.files)),
                     'total_commits_analyzed': len(set(c for s in secrets for c in s.commits)),

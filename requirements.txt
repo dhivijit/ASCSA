@@ -8,11 +8,8 @@ python-dotenv
 cryptography>=41.0.0
 requests
 colorama
-tree-sitter
+tree-sitter>=0.20.0
+tree-sitter-python>=0.20.0
+tree-sitter-javascript>=0.20.0
+tree-sitter-typescript>=0.20.0
 boto3
-
-# Optional: Tree-sitter for advanced AST analysis
-# Uncomment to enable tree-sitter support
-# tree-sitter>=0.20.0
-# tree-sitter-python>=0.20.0
-# tree-sitter-javascript>=0.20.0

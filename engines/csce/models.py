@@ -17,6 +17,7 @@ class CorrelationType(Enum):
     BEHAVIORAL = "behavioral"
     SECRET_MATCH = "secret_match"
     PROPAGATION = "propagation"
+    CODE_STRUCTURE = "code_structure"
 
 
 class CorrelationSeverity(Enum):
