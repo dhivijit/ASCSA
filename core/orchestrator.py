@@ -152,6 +152,9 @@ class PipelineOrchestrator:
         except Exception as e:
             logger.error(f"Failed to write main report: {e}")
 
+        # Relativize all absolute paths in output files before upload/return
+        self._relativize_output_dir(output_dir)
+
         # Upload reports to cloud storage if enabled
         if self.context.enable_upload:
             self._upload_reports(output_dir)
@@ -952,6 +955,62 @@ class PipelineOrchestrator:
             self.results['recommendation'] = 'PASS'
             self.results['exit_code'] = exit_codes.SUCCESS
     
+    def _relativize_output_dir(self, output_dir: str) -> None:
+        """Post-process all report files in output_dir, replacing absolute
+        repo path prefixes with ``reponame/`` in every written file.
+
+        Handles Windows backslash, forward-slash, JSON double-escaped
+        backslash, and MSYS/Git-Bash path variants so the result is
+        portable regardless of the platform the scan ran on.
+        """
+        import re as _re
+
+        repo_path = self.context.repo_path
+        norm = repo_path.replace("\\", "/").rstrip("/")
+        repo_name = norm.split("/")[-1]
+        prefix = repo_name + "/"
+
+        # All path variants that may appear in written files
+        variants: list = []
+
+        # 1. Forward-slash form:  C:/Users/.../testrepo/
+        variants.append(norm + "/")
+
+        # 2. Backslash form:      C:\Users\...\testrepo\
+        bs_form = norm.replace("/", "\\") 
+        variants.append(bs_form + "\\")
+
+        # 3. JSON double-escaped: C:\\Users\\...\\testrepo\\
+        variants.append(bs_form.replace("\\", "\\\\") + "\\\\")
+
+        # 4. MSYS/Git-Bash:       /c/Users/.../testrepo/
+        if len(norm) >= 2 and norm[1] == ":":
+            msys = "/" + norm[0].lower() + norm[2:] + "/"
+            variants.append(msys)
+
+        # Text file extensions to process
+        text_exts = {".json", ".txt", ".md", ".yaml", ".yml", ".csv"}
+
+        for fname in os.listdir(output_dir):
+            fpath = os.path.join(output_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            _, ext = os.path.splitext(fname)
+            if ext.lower() not in text_exts:
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                modified = content
+                for v in variants:
+                    if v:
+                        modified = modified.replace(v, prefix)
+                if modified != content:
+                    with open(fpath, "w", encoding="utf-8") as f:
+                        f.write(modified)
+            except Exception as e:
+                logger.warning(f"Could not relativize paths in {fname}: {e}")
+
     def _upload_reports(self, report_dir: str):
         """Upload generated reports to cloud storage."""
         logger.info("=" * 80)
