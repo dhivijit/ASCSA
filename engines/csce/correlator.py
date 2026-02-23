@@ -1,4 +1,17 @@
-# CSCE correlator - Main correlation logic
+"""CSCE Correlator — Cross-engine security correlation logic.
+
+Finds relationships between findings from HCRS (code violations),
+SDDA (secret drift), and SLGA (hardcoded secrets / lineage).
+
+Correlation types:
+  - Spatial: violation and secret in the same file
+  - Secret Match: hardcoded secret detected by both HCRS and SLGA
+  - Behavioral: secret drift coinciding with code violations
+  - Propagation: secret propagated through risky code (Neo4j)
+
+The report includes an ``input_summary`` so consumers can see what
+each engine contributed, even when correlation count is zero.
+"""
 import logging
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
@@ -11,11 +24,13 @@ from engines.slga.models import Secret
 
 logger = logging.getLogger(__name__)
 
+
 class CorrelationEngine:
-    """Correlates findings from HCRS, SDDA, and SLGA"""
-    
+    """Correlates findings from HCRS, SDDA, and SLGA."""
+
     def __init__(self):
         self.correlations = []
+        self._input_counts = {'hcrs_violations': 0, 'sdda_drifts': 0, 'slga_secrets': 0}
     
     def correlate(
         self, 
@@ -37,11 +52,16 @@ class CorrelationEngine:
             CorrelationReport with all found correlations
         """
         self.correlations = []
-        
+        self._input_counts = {
+            'hcrs_violations': len(hcrs_violations),
+            'sdda_drifts': len(sdda_drifts) if sdda_drifts else 0,
+            'slga_secrets': len(slga_secrets) if slga_secrets else 0,
+        }
+
         logger.info("Starting CSCE correlation analysis...")
-        logger.info(f"Inputs: {len(hcrs_violations)} violations, "
-                   f"{len(sdda_drifts) if sdda_drifts else 0} drifts, "
-                   f"{len(slga_secrets) if slga_secrets else 0} secrets")
+        logger.info(f"Inputs: {self._input_counts['hcrs_violations']} violations, "
+                    f"{self._input_counts['sdda_drifts']} drifts, "
+                    f"{self._input_counts['slga_secrets']} secrets")
         
         # 1. Spatial correlation (same file/location)
         if slga_secrets:
@@ -348,7 +368,8 @@ class CorrelationEngine:
             correlations=self.correlations,
             avg_confidence=total_confidence / len(self.correlations) if self.correlations else 0,
             high_confidence_count=len(high_confidence),
-            top_priorities=top_priorities
+            top_priorities=top_priorities,
+            input_summary=dict(self._input_counts),
         )
 
 

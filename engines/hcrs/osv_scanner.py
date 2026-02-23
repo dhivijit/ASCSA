@@ -1,21 +1,28 @@
+"""
+OSV Scanner — Dependency vulnerability checking via the OSV.dev API.
+
+Parses requirements.txt (PyPI) and package.json (npm) to extract
+dependency lists, then queries the OSV REST API for known
+vulnerabilities in each package+version.
+"""
 import requests
 import re
 import json
 
-# subject to modification to pass the directory to let it directly access the dependency files
+# HTTP timeout for OSV API requests (seconds)
+_OSV_TIMEOUT = 30
+
 
 def scan_dep_vulns(content, filename):
-    """
-    Scan dependencies for vulnerabilities from content and filename.
+    """Scan dependencies for vulnerabilities from content and filename.
 
     Args:
-        content (str): The content of the requirements.txt or package.json file
-        filename (str): The filename to determine which parser to use
+        content: The content of the requirements.txt or package.json file.
+        filename: The filename to determine which parser to use.
 
     Returns:
-        list: List of vulnerability dictionaries, empty list if no vulnerabilities found
+        List of vulnerability dictionaries, empty list if none found.
     """
-
 
     def parse_requirements_txt(content):
         packages = []
@@ -47,10 +54,19 @@ def scan_dep_vulns(content, filename):
 
     def get_vulns_for_package(pkg):
         url = "https://api.osv.dev/v1/query"
-        resp = requests.post(url, json=pkg)
-        if resp.status_code != 200:
-            print(f"Error querying OSV for {pkg}: {resp.status_code}")
+        try:
+            resp = requests.post(url, json=pkg, timeout=_OSV_TIMEOUT)
+        except requests.exceptions.Timeout:
+            print(f"Timeout querying OSV for {pkg['package']['name']}")
             return []
+        except requests.exceptions.RequestException as e:
+            print(f"Error querying OSV for {pkg['package']['name']}: {e}")
+            return []
+
+        if resp.status_code != 200:
+            print(f"Error querying OSV for {pkg['package']['name']}: HTTP {resp.status_code}")
+            return []
+
         data = resp.json()
         vulns = []
         for vuln in data.get("vulns", []):
@@ -73,14 +89,13 @@ def scan_dep_vulns(content, filename):
             })
         return vulns
 
-
     # Parse packages based on file extension
     if filename.endswith(".txt"):
         packages = parse_requirements_txt(content)
     elif filename.endswith(".json"):
         packages = parse_package_json(content)
     else:
-        raise ValueError(f"Unsupported file type. Only .txt (requirements.txt) and .json (package.json) are supported. Got {filename}")
+        raise ValueError(f"Unsupported file type. Only .txt and .json are supported. Got {filename}")
 
     # Scan each package for vulnerabilities
     all_vulns = []
@@ -89,9 +104,8 @@ def scan_dep_vulns(content, filename):
         if vulns:
             all_vulns.extend(vulns)
 
-    print(f"Found {len(all_vulns)} vulnerabilities in {filename}. Details: {all_vulns[:5]}...")  # Show first 5 for brevity
-    if not all_vulns:
-        print(f"No vulnerabilities found in {filename}.")
-    else:
+    if all_vulns:
         print(f"Found {len(all_vulns)} vulnerabilities in {filename}.")
+    else:
+        print(f"No vulnerabilities found in {filename}.")
     return all_vulns

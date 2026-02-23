@@ -401,25 +401,27 @@ class TestReportGenerationAndFormatting(unittest.TestCase):
         with open(test_file, 'w') as f:
             f.write('SECRET = "test_secret_123"\nimport os\nos.system(user_cmd)\n')
         
-        from engines.hcrs.reporter import generate_json_report
+        from engines.hcrs.reporter import HCRSReporter
+        import json
         
         scanner = HCRSScanner()
-        report = scanner.scan_file(test_file)
-        json_report = generate_json_report(report)
+        repo_report = scanner.scan_repository(self.test_dir)
+        json_str = HCRSReporter.generate_json_report(repo_report)
+        json_report = json.loads(json_str)
         
         # Check required fields
-        self.assertIn('file_path', json_report)
-        self.assertIn('risk_score', json_report)
-        self.assertIn('violations', json_report)
-        self.assertIn('total_violations', json_report)
-        self.assertIn('severity_breakdown', json_report)
+        self.assertIn('repo_path', json_report)
+        self.assertIn('total_score', json_report)
+        self.assertIn('summary', json_report)
+        self.assertIn('files_with_violations', json_report)
         
         # Check violations structure
-        if len(json_report['violations']) > 0:
-            violation = json_report['violations'][0]
-            self.assertIn('type', violation)
-            self.assertIn('severity', violation)
-            self.assertIn('message', violation)
+        for fv in json_report['files_with_violations']:
+            self.assertIn('violations', fv)
+            for violation in fv['violations']:
+                self.assertIn('type', violation)
+                self.assertIn('severity', violation)
+                self.assertIn('message', violation)
     
     def test_text_report_readability(self):
         """Test that text report is human-readable"""
@@ -427,15 +429,15 @@ class TestReportGenerationAndFormatting(unittest.TestCase):
         with open(test_file, 'w') as f:
             f.write('PASSWORD = "hardcoded_password"\n')
         
-        from engines.hcrs.reporter import generate_text_report
+        from engines.hcrs.reporter import HCRSReporter
         
         scanner = HCRSScanner()
-        report = scanner.scan_file(test_file)
-        text_report = generate_text_report(report)
+        repo_report = scanner.scan_repository(self.test_dir)
+        text_report = HCRSReporter.generate_text_report(repo_report)
         
         # Should contain key information
         self.assertIn('Risk Score', text_report)
-        self.assertIn('Violations', text_report)
+        self.assertIn('Violation', text_report)
         
         # Should be readable
         self.assertGreater(len(text_report), 50)

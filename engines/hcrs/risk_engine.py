@@ -1,4 +1,15 @@
-# HCRS risk engine - Updated comprehensive version
+"""HCRS Risk Engine — Score computation and recommendation generation.
+
+Computes per-file and per-repository risk scores from detected violations,
+normalized to a 0-100 scale using logarithmic scaling.  Also generates
+human-readable recommendations based on severity counts and score.
+
+Key fixes applied:
+  - lines_analyzed now reflects actual source line count, not violation count
+  - Recommendation thresholds adjusted for normalized 0-100 score range
+  - Clean-repo case produces a meaningful positive recommendation
+"""
+import os
 from datetime import datetime
 from typing import List, Dict
 import math
@@ -8,10 +19,20 @@ from .models import (
 )
 from .config_loader import load_hcrs_config, get_risk_weight
 
-def compute_file_risk_score(file_path: str, language: str, violations: List[SecurityViolation]) -> FileRiskScore:
-    """Compute risk score for a single file"""
-    config = load_hcrs_config()
-    
+def compute_file_risk_score(file_path: str, language: str, violations: List[SecurityViolation],
+                            config: dict = None) -> FileRiskScore:
+    """Compute risk score for a single file.
+
+    Args:
+        file_path: Absolute path to the source file.
+        language: Language identifier (e.g. 'python', 'javascript').
+        violations: Violations detected in this file.
+        config: Pre-loaded HCRS config dict.  When None the config
+                is loaded from disk (kept for backward compatibility).
+    """
+    if config is None:
+        config = load_hcrs_config()
+
     total_score = 0.0
     severity_breakdown = {
         'CRITICAL': 0,
@@ -20,25 +41,29 @@ def compute_file_risk_score(file_path: str, language: str, violations: List[Secu
         'LOW': 0,
         'INFO': 0
     }
-    
+
     for violation in violations:
-        # Get weight for this violation type
         weight = get_risk_weight(violation.violation_type.value, config)
-        
-        # Calculate weighted score with confidence
         violation_score = weight * violation.confidence
         total_score += violation_score
-        
-        # Update severity breakdown
         severity_breakdown[violation.severity.value] += 1
-    
+
+    # Count actual source lines instead of using violation count
+    lines_analyzed = 0
+    if os.path.isfile(file_path):
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines_analyzed = sum(1 for _ in f)
+        except OSError:
+            pass
+
     return FileRiskScore(
         file_path=file_path,
         language=language,
         total_score=total_score,
         violations=violations,
         severity_breakdown=severity_breakdown,
-        lines_analyzed=len(violations)  # Approximate
+        lines_analyzed=lines_analyzed
     )
 
 def compute_repository_risk_score(repo_path: str, file_scores: List[FileRiskScore]) -> RepositoryRiskScore:
@@ -110,46 +135,54 @@ def compute_repository_risk_score(repo_path: str, file_scores: List[FileRiskScor
     return repo_score
 
 def generate_recommendation(severity_counts: Dict[str, int], total_score: float) -> str:
-    """Generate actionable recommendation based on risk analysis"""
+    """Generate actionable recommendation based on risk analysis.
+
+    Thresholds are calibrated for the normalised 0-100 score range
+    produced by ``compute_repository_risk_score``.
+    """
     critical = severity_counts.get('CRITICAL', 0)
     high = severity_counts.get('HIGH', 0)
     medium = severity_counts.get('MEDIUM', 0)
-    
+
     recommendations = []
-    
+
     if critical > 0:
         recommendations.append(
-            f"🚨 CRITICAL: {critical} critical security issue(s) detected. "
+            f"CRITICAL: {critical} critical security issue(s) detected. "
             "These must be fixed immediately before deployment. "
             "Review hardcoded secrets, command injection risks, and unsafe deserialization."
         )
-    
+
     if high > 0:
         recommendations.append(
-            f"⚠️  HIGH: {high} high-severity issue(s) found. "
+            f"HIGH: {high} high-severity issue(s) found. "
             "Address these before merging to production. "
             "Focus on SQL injection, weak cryptography, and sensitive data exposure."
         )
-    
+
     if medium > 0:
         recommendations.append(
-            f"📋 MEDIUM: {medium} medium-severity issue(s) detected. "
+            f"MEDIUM: {medium} medium-severity issue(s) detected. "
             "Plan to fix these in upcoming sprints."
         )
-    
-    if total_score > 500:
+
+    # Thresholds adjusted for normalised 0-100 range
+    if total_score > 80:
         recommendations.append(
-            "⛔ BLOCK: Total risk score exceeds acceptable threshold. "
+            "BLOCK: Total risk score exceeds acceptable threshold. "
             "This code should not be deployed until critical issues are resolved."
         )
-    elif total_score > 200:
+    elif total_score > 50:
         recommendations.append(
-            "⚠️  WARN: Risk score is elevated. Requires security review before deployment."
+            "WARN: Risk score is elevated. Requires security review before deployment."
         )
     else:
         if not recommendations:
-            recommendations.append("✅ ALLOW: No significant security issues detected.")
-    
+            recommendations.append(
+                "ALLOW: No significant security issues detected. "
+                "The repository appears clean from a static-analysis perspective."
+            )
+
     return " ".join(recommendations)
 
 def compute_risk(lineage, drift_report, osv_results):

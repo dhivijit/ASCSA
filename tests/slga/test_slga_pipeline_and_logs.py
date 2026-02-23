@@ -12,7 +12,7 @@ def test_detect_secrets_in_pipeline_config():
     with tempfile.TemporaryDirectory() as tmpdir:
         ci_path = os.path.join(tmpdir, 'ci.yaml')
         make_file(ci_path, 'stages:\n  - build\n  - deploy\n  - test\n  password: "supersecret123"\n')
-        secrets = detector.detect_secrets(tmpdir, ci_config_path=ci_path)
+        secrets, _scan_stats = detector.detect_secrets(tmpdir, ci_config_path=ci_path)
         assert any('supersecret123' in s.value for s in secrets)
 
 def test_scan_logs_for_secrets():

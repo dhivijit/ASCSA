@@ -123,12 +123,13 @@ index abc123..def456 100644
     
     def test_run_slga_with_commit_scanning(self, temp_repo):
         """Test full SLGA run with commit scanning enabled"""
-        graph, secrets, db_path, propagation = run_slga(
+        result = run_slga(
             repo_path=temp_repo,
             scan_commits=True,
             max_commits=10,
             store_to_db=False  # Don't create DB in tests
         )
+        graph, secrets, db_path, propagation = result[0], result[1], result[2], result[3]
         
         # Should find secrets (both from files and commits)
         assert len(secrets) >= 0  # May be 0 if secrets were all removed
@@ -139,11 +140,12 @@ index abc123..def456 100644
     
     def test_run_slga_without_commit_scanning(self, temp_repo):
         """Test SLGA run with commit scanning disabled"""
-        graph, secrets, db_path, propagation = run_slga(
+        result = run_slga(
             repo_path=temp_repo,
             scan_commits=False,
             store_to_db=False
         )
+        graph, secrets, db_path, propagation = result[0], result[1], result[2], result[3]
         
         # Should only find secrets in current files (none after removal commit)
         commit_secrets = [s for s in secrets if s.secret_type == "commit_history"]

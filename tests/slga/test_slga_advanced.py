@@ -22,7 +22,11 @@ def test_multiple_secrets_and_files():
     tmpdir = tempfile.mkdtemp()
     try:
         repo_path = create_multifile_repo(tmpdir)
-        graph = run_slga(repo_path)
+        result = run_slga(repo_path)
+        graph = result[0]
+        if graph is None:
+            import pytest
+            pytest.skip("Neo4j not available")
         with graph.driver.session() as session:
             result = session.run(
                 "MATCH (s:Secret) RETURN count(s) as count"

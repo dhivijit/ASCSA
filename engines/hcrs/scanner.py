@@ -1,4 +1,13 @@
-# HCRS scanner - Main analysis orchestrator
+"""
+HCRS Scanner — Main analysis orchestrator for Hybrid Code Risk Scoring.
+
+Discovers files in a repository, dispatches to language-specific analyzers
+(Python, JavaScript), runs OSV dependency vulnerability checks, and
+aggregates results into a RepositoryRiskScore.
+
+Tracks scan coverage metadata so reports are meaningful even when no
+violations are found.
+"""
 import os
 from typing import List, Tuple, Dict
 from .models import FileRiskScore, RepositoryRiskScore
@@ -9,61 +18,84 @@ from .javascript_analyzer import JavaScriptAnalyzer
 from .risk_engine import compute_file_risk_score, compute_repository_risk_score
 from .osv_scanner import scan_dep_vulns
 
+
 class HCRSScanner:
-    """Main scanner for Hybrid Code Risk Scoring"""
-    
+    """Main scanner for Hybrid Code Risk Scoring.
+
+    Coordinates file discovery, language analysis, dependency scanning,
+    and risk score computation for an entire repository.
+    """
+
     def __init__(self, config_path: str = None, rules_path: str = None):
         self.config = load_hcrs_config(config_path)
         self.rule_loader = RuleLoader(rules_path)
-        
-        # Initialize language analyzers
+
         python_rules = self.rule_loader.get_rules_for_language('python')
         javascript_rules = self.rule_loader.get_rules_for_language('javascript')
-        
+
         self.python_analyzer = PythonSimpleAnalyzer(python_rules)
         self.javascript_analyzer = JavaScriptAnalyzer(javascript_rules)
-    
+
     def scan_repository(self, repo_path: str) -> RepositoryRiskScore:
-        """
-        Scan entire repository for security vulnerabilities.
-        
+        """Scan entire repository for security vulnerabilities.
+
         Args:
-            repo_path: Path to repository root
-        
+            repo_path: Path to repository root.
+
         Returns:
-            RepositoryRiskScore with complete analysis
+            RepositoryRiskScore with complete analysis and scan coverage.
         """
         print(f"Starting HCRS scan of repository: {repo_path}")
-        
-        # Find all eligible files
+
         files_to_scan = self._discover_files(repo_path)
         print(f"Found {len(files_to_scan)} files to analyze")
-        
-        # Scan each file
+
+        # Track scan coverage by language
+        language_counts = {}
+        for _, lang in files_to_scan:
+            language_counts[lang] = language_counts.get(lang, 0) + 1
+
         file_scores = []
+        skipped_count = 0
         for i, (file_path, language) in enumerate(files_to_scan, 1):
             if i % 10 == 0:
                 print(f"Progress: {i}/{len(files_to_scan)} files analyzed")
-            
+
             file_score = self.scan_file(file_path, language)
             if file_score:
                 file_scores.append(file_score)
-        
+            else:
+                skipped_count += 1
+
         # Scan dependencies for vulnerabilities (OSV)
         dependency_vulns = self._scan_dependencies(repo_path)
-        
+
         # Compute repository-level risk
         repo_score = compute_repository_risk_score(repo_path, file_scores)
         repo_score.dependency_vulnerabilities = dependency_vulns
-        
-        print(f"\\nScan complete!")
+
+        # Enrich summary with scan coverage metadata
+        repo_score.summary['scan_coverage'] = {
+            'total_files_discovered': len(files_to_scan),
+            'total_files_analyzed': len(file_scores),
+            'files_skipped': skipped_count,
+            'files_by_language': language_counts,
+            'rules_loaded': {
+                'python': len(self.rule_loader.get_rules_for_language('python')),
+                'javascript': len(self.rule_loader.get_rules_for_language('javascript')),
+            },
+            'dependency_files_checked': self._count_dep_files(repo_path),
+            'dependency_vulnerabilities_found': len(dependency_vulns),
+        }
+
+        print(f"\nScan complete!")
         print(f"Total violations: {repo_score.summary['total_violations']}")
         print(f"  Critical: {repo_score.critical_count}")
         print(f"  High: {repo_score.high_count}")
         print(f"  Medium: {repo_score.medium_count}")
         print(f"  Low: {repo_score.low_count}")
         print(f"Total risk score: {repo_score.total_score:.2f}")
-        
+
         return repo_score
     
     def scan_file(self, file_path: str, language: str = None) -> FileRiskScore:
@@ -176,21 +208,19 @@ class HCRSScanner:
         return repo_score
     
     def _scan_dependencies(self, repo_path: str) -> List[Dict]:
-        """
-        Scan dependency files for known vulnerabilities using OSV.
-        
+        """Scan dependency files for known vulnerabilities using OSV.
+
         Returns:
-            List of vulnerability dictionaries from OSV
+            List of vulnerability dictionaries from OSV.
         """
         all_vulns = []
-        
-        # Look for dependency files
+
         dep_files = {
             'requirements.txt': 'requirements.txt',
             'package.json': 'package.json',
             'package-lock.json': 'package-lock.json'
         }
-        
+
         for filename, basename in dep_files.items():
             file_path = os.path.join(repo_path, filename)
             if os.path.exists(file_path):
@@ -198,16 +228,21 @@ class HCRSScanner:
                     print(f"Scanning dependencies in {filename}...")
                     with open(file_path, 'r', encoding='utf-8') as f:
                         content = f.read()
-                    
+
                     vulns = scan_dep_vulns(content, basename)
                     all_vulns.extend(vulns)
-                    
+
                 except Exception as e:
                     print(f"Warning: Could not scan {filename}: {e}")
-        
+
         if all_vulns:
             print(f"Found {len(all_vulns)} dependency vulnerabilities")
         else:
             print("No dependency vulnerabilities found")
-        
+
         return all_vulns
+
+    def _count_dep_files(self, repo_path: str) -> int:
+        """Count how many dependency manifest files exist in the repo."""
+        dep_filenames = ['requirements.txt', 'package.json', 'package-lock.json']
+        return sum(1 for f in dep_filenames if os.path.exists(os.path.join(repo_path, f)))

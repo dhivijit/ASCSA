@@ -1,88 +1,100 @@
-# CSCE models
+"""
+CSCE Models — Data structures for Cross-engine Security Correlation.
+
+Defines the Correlation, CorrelationReport, and supporting enums used
+by the correlation engine and reporters.
+"""
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 from enum import Enum
 
+
 class CorrelationType(Enum):
-    """Types of correlations between different security signals"""
-    SPATIAL = "spatial"  # Same file/location
-    TEMPORAL = "temporal"  # Same time period
-    BEHAVIORAL = "behavioral"  # Secret behavior + code risk
-    SECRET_MATCH = "secret_match"  # Direct secret value match
-    PROPAGATION = "propagation"  # Secret propagated through risky code
+    """Types of correlations between different security signals."""
+    SPATIAL = "spatial"
+    TEMPORAL = "temporal"
+    BEHAVIORAL = "behavioral"
+    SECRET_MATCH = "secret_match"
+    PROPAGATION = "propagation"
+
 
 class CorrelationSeverity(Enum):
-    """Severity of correlated findings"""
+    """Severity of correlated findings."""
     CRITICAL = "CRITICAL"
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
 
+
 @dataclass
 class Correlation:
-    """Represents a correlation between multiple security signals"""
+    """Represents a correlation between multiple security signals."""
     correlation_id: str
     correlation_type: CorrelationType
     severity: CorrelationSeverity
-    confidence: float  # 0.0 to 1.0
-    
-    # References to source findings
+    confidence: float
+
     hcrs_violation_ids: List[str] = field(default_factory=list)
     sdda_drift_ids: List[str] = field(default_factory=list)
     slga_secret_ids: List[str] = field(default_factory=list)
-    
-    # Details
+
     description: str = ""
     evidence: Dict[str, Any] = field(default_factory=dict)
     recommendation: str = ""
-    
-    # Metadata
     timestamp: datetime = field(default_factory=datetime.now)
-    
+
     @property
     def is_critical(self) -> bool:
         return self.severity == CorrelationSeverity.CRITICAL
-    
+
     @property
     def is_high_confidence(self) -> bool:
         return self.confidence >= 0.7
 
+
 @dataclass
 class CorrelationReport:
-    """Summary report of all correlations found"""
+    """Summary report of all correlations found.
+
+    Includes ``input_summary`` so downstream consumers (LLM, CI dashboards)
+    can see what each engine contributed, even when the counts are zero.
+    """
     timestamp: datetime
     total_correlations: int
     critical_count: int
     high_count: int
     medium_count: int
     low_count: int
-    
+
     correlations: List[Correlation] = field(default_factory=list)
-    
-    # Statistics
+
     avg_confidence: float = 0.0
     high_confidence_count: int = 0
-    
-    # Recommendations
+
     top_priorities: List[Correlation] = field(default_factory=list)
-    
+
+    # Input summary — what each engine contributed to correlation
+    input_summary: Dict[str, int] = field(default_factory=lambda: {
+        'hcrs_violations': 0,
+        'sdda_drifts': 0,
+        'slga_secrets': 0,
+    })
+
     def get_by_severity(self, severity: CorrelationSeverity) -> List[Correlation]:
-        """Get all correlations of a specific severity"""
         return [c for c in self.correlations if c.severity == severity]
-    
+
     def get_high_confidence(self) -> List[Correlation]:
-        """Get all high-confidence correlations"""
         return [c for c in self.correlations if c.is_high_confidence]
-    
+
     def get_critical_alerts(self) -> List[Correlation]:
-        """Get all critical severity correlations"""
         return [c for c in self.correlations if c.is_critical]
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert report to dictionary for JSON serialization"""
+        """Convert report to dictionary for JSON serialization."""
         return {
             'timestamp': self.timestamp.isoformat(),
+            'input_summary': self.input_summary,
             'summary': {
                 'total_correlations': self.total_correlations,
                 'critical_count': self.critical_count,

@@ -27,8 +27,11 @@ def test_secret_detection_and_graph():
     tmpdir = tempfile.mkdtemp()
     try:
         repo_path = create_sample_repo(tmpdir)
-        graph = run_slga(repo_path)
+        result = run_slga(repo_path)
+        graph = result[0]
         # Check if secret node exists in Neo4j
+        if graph is None:
+            pytest.skip("Neo4j not available")
         with graph.driver.session() as session:
             result = session.run(
                 "MATCH (s:Secret) WHERE s.value CONTAINS 'sk_live_' RETURN s"
@@ -45,7 +48,10 @@ def test_secret_propagation_query():
     tmpdir = tempfile.mkdtemp()
     try:
         repo_path = create_sample_repo(tmpdir)
-        graph = run_slga(repo_path)
+        result = run_slga(repo_path)
+        graph = result[0]
+        if graph is None:
+            pytest.skip("Neo4j not available")
         # Query propagation
         results = graph.query_secret_propagation('sk_live_1234567890abcdef1234567890abcdef')
         assert results, "Propagation query returned no results"

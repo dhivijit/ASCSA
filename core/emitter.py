@@ -1,5 +1,7 @@
-# Core emitter logic
-"""Output formatting and emission for ASCSA-CI results."""
+"""Output formatting and emission for ASCSA-CI results.
+
+Provides console (colored), JSON, and YAML output of scan results.
+"""
 
 import logging
 import json
@@ -103,7 +105,7 @@ class ResultEmitter:
                         color = self._get_severity_color(severity)
                         lines.append(f"    {color}{severity}: {count}{Style.RESET_ALL}")
         elif results.get('sdda_skipped'):
-            lines.append(f"\n{Fore.YELLOW}SDDA: Skipped (requires Neo4j){Style.RESET_ALL}")
+            lines.append(f"\n{Fore.YELLOW}SDDA: Skipped (requires SLGA results with detected secrets){Style.RESET_ALL}")
         
         # HCRS Results
         if 'hcrs' in results and not results.get('hcrs_skipped'):
@@ -113,7 +115,7 @@ class ResultEmitter:
             hcrs = results['hcrs']
             total_score = hcrs.get('total_score') or 0
             lines.append(f"  Total Risk Score: {total_score:.2f}")
-            lines.append(f"  Files Analyzed: {len(hcrs.get('file_scores', []))}")
+            lines.append(f"  Files Analyzed: {hcrs.get('total_files_analyzed', 0)}")
             
             # Violation counts
             lines.append("\n  Security Violations:")
@@ -133,6 +135,29 @@ class ResultEmitter:
                     lines.append(f"       {v.get('message')}")
         elif results.get('hcrs_skipped'):
             lines.append(f"\n{Fore.YELLOW}HCRS: Skipped{Style.RESET_ALL}")
+        
+        # CSCE Results
+        if 'csce' in results and not results.get('csce_skipped'):
+            lines.append(f"\n{Fore.CYAN}{'─' * 80}{Style.RESET_ALL}")
+            lines.append(f"{Fore.CYAN}{Style.BRIGHT}Code-Secret Correlation Engine (CSCE){Style.RESET_ALL}")
+            lines.append(f"{Fore.CYAN}{'─' * 80}{Style.RESET_ALL}")
+            csce = results['csce']
+            lines.append(f"  Total Correlations: {csce.get('total_correlations', 0)}")
+            lines.append(f"  Average Confidence: {csce.get('avg_confidence', 0):.0%}")
+            lines.append(f"\n  Severity Breakdown:")
+            lines.append(f"    {Fore.RED}CRITICAL: {csce.get('critical_count', 0)}{Style.RESET_ALL}")
+            lines.append(f"    {Fore.MAGENTA}HIGH: {csce.get('high_count', 0)}{Style.RESET_ALL}")
+            lines.append(f"    {Fore.YELLOW}MEDIUM: {csce.get('medium_count', 0)}{Style.RESET_ALL}")
+            lines.append(f"    {Fore.CYAN}LOW: {csce.get('low_count', 0)}{Style.RESET_ALL}")
+            top = csce.get('top_priorities', [])
+            if top:
+                lines.append(f"\n  Top Correlations:")
+                for i, c in enumerate(top[:5], 1):
+                    sev_color = self._get_severity_color(c.get('severity', 'LOW'))
+                    lines.append(f"    {i}. [{sev_color}{c.get('severity')}{Style.RESET_ALL}] "
+                               f"{c.get('type', '').upper()} — {c.get('description', '')}")
+        elif results.get('csce_skipped'):
+            lines.append(f"\n{Fore.YELLOW}CSCE: Skipped{Style.RESET_ALL}")
         
         # Recommendations
         if 'recommendations' in results and results['recommendations']:

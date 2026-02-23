@@ -1,7 +1,9 @@
-# Core orchestrator logic
 """
 Main orchestrator for ASCSA-CI security pipeline.
-Coordinates execution of SLGA, SDDA, and HCRS engines.
+
+Coordinates execution of SLGA, SDDA, HCRS, and CSCE engines,
+generates all report files, and produces the master ascsa_report.json
+with scan metadata and LLM-friendly context.
 """
 
 import logging
@@ -44,9 +46,7 @@ class PipelineOrchestrator:
     
     def run(self) -> Dict[str, Any]:
         """Execute the complete security pipeline."""
-        import os
-        import json
-        from datetime import datetime
+        scan_start = datetime.now()
         logger.info(f"Starting ASCSA-CI security scan: {self.context.run_id}")
         logger.info(f"Repository: {self.context.repo_path}")
         logger.info(f"Branch: {self.context.branch}, Environment: {self.context.environment}")
@@ -58,15 +58,9 @@ class PipelineOrchestrator:
         # Phase 1: Secret Lineage Graph Analysis (SLGA)
         slga_result = None
         if not self.context.skip_slga:
-            slga_result = self._run_slga()  # Returns SecretLineage object
-            # Save SLGA output
-            try:
-                slga_path = os.path.join(output_dir, "slga.txt")
-                with open(slga_path, "w", encoding="utf-8") as f:
-                    json.dump(self.results.get('slga', {}), f, indent=2, default=str)
-                logger.info(f"SLGA output saved to {slga_path}")
-            except Exception as e:
-                logger.error(f"Failed to write SLGA output: {e}")
+            slga_result = self._run_slga()
+            # NOTE: slga.txt, slga.json, slga_propagation_analysis.json
+            # are written inside _run_slga() — no duplicate write here.
         else:
             logger.info("SLGA: Skipped by configuration")
             self.results['slga_skipped'] = True
@@ -75,19 +69,20 @@ class PipelineOrchestrator:
         sdda_result = None
         if not self.context.skip_sdda and slga_result:
             sdda_result = self._run_sdda(slga_result)
-            # Save SDDA output
+            # Save SDDA text report
             try:
-                sdda_path = os.path.join(output_dir, "sdda.txt")
-                with open(sdda_path, "w", encoding="utf-8") as f:
-                    json.dump(self.results.get('sdda', {}), f, indent=2, default=str)
-                logger.info(f"SDDA output saved to {sdda_path}")
+                sdda_text_path = os.path.join(output_dir, "sdda.txt")
+                sdda_text = self._format_sdda_text(sdda_result)
+                with open(sdda_text_path, "w", encoding="utf-8") as f:
+                    f.write(sdda_text)
+                logger.info(f"SDDA text report saved to {sdda_text_path}")
             except Exception as e:
-                logger.error(f"Failed to write SDDA output: {e}")
+                logger.error(f"Failed to write SDDA text report: {e}")
         else:
             if self.context.skip_sdda:
                 logger.info("SDDA: Skipped by configuration")
             else:
-                logger.info("SDDA: Skipped (requires SLGA results)")
+                logger.info("SDDA: Skipped (requires SLGA results with detected secrets)")
             self.results['sdda_skipped'] = True
 
         # Phase 3: Hybrid Code Risk Scoring (HCRS)
@@ -131,7 +126,24 @@ class PipelineOrchestrator:
         # Phase 7: Determine Exit Code
         self._determine_exit_code()
 
-        # Save main report (all results)
+        # Save main report (all results) with scan metadata
+        scan_end = datetime.now()
+        scan_duration = (scan_end - scan_start).total_seconds()
+
+        self.results['scan_metadata'] = {
+            'scan_start': scan_start.isoformat(),
+            'scan_end': scan_end.isoformat(),
+            'scan_duration_seconds': round(scan_duration, 2),
+            'engines_run': {
+                'slga': not self.results.get('slga_skipped', False),
+                'sdda': not self.results.get('sdda_skipped', False),
+                'hcrs': not self.results.get('hcrs_skipped', False),
+                'csce': not self.results.get('csce_skipped', False),
+            },
+        }
+
+        self.results['llm_context'] = self._build_llm_context()
+
         try:
             report_path = os.path.join(output_dir, "ascsa_report.json")
             with open(report_path, "w", encoding="utf-8") as f:
@@ -182,8 +194,11 @@ class PipelineOrchestrator:
                 max_commits=max_commits
             )
             
-            # Unpack results (supports both old and new return format)
-            if len(result) == 4:
+            # Unpack results (supports old 4-tuple and new 5-tuple with scan_stats)
+            scan_stats = None
+            if len(result) == 5:
+                graph, secrets, db_path, propagation_analysis, scan_stats = result
+            elif len(result) == 4:
                 graph, secrets, db_path, propagation_analysis = result
             else:
                 graph, secrets, db_path = result
@@ -236,6 +251,22 @@ class PipelineOrchestrator:
                     logger.info(f"Propagation analysis saved to {propagation_path}")
                 except Exception as e:
                     logger.error(f"Failed to save propagation analysis: {e}")
+            else:
+                # Always create the file so downstream consumers have a consistent set of outputs
+                try:
+                    output_dir = self.context.reportout_dir or self.context.repo_path
+                    propagation_path = os.path.join(output_dir, "slga_propagation_analysis.json")
+                    placeholder = {
+                        "status": "not_available",
+                        "reason": "Neo4j credentials not configured or no secrets detected for propagation analysis",
+                        "individual_analysis": [],
+                        "critical_chains": []
+                    }
+                    with open(propagation_path, "w", encoding="utf-8") as f:
+                        json.dump(placeholder, f, indent=2)
+                    logger.info(f"Propagation analysis placeholder saved to {propagation_path}")
+                except Exception as e:
+                    logger.error(f"Failed to save propagation analysis placeholder: {e}")
 
             logger.info(f"SLGA: Found {total_secrets} secrets total")
             logger.info(f"SLGA:   - Current files: {len(file_secrets)} secrets in {total_files} files")
@@ -243,11 +274,15 @@ class PipelineOrchestrator:
             logger.info(f"SLGA:   - Total commits analyzed: {total_commits}")
             logger.info(f"SLGA: Data stored in database: {db_path}")
             
+            # Add scan_stats to results if available
+            if scan_stats:
+                self.results['slga']['scan_stats'] = scan_stats
+
             # Generate and save text report
             try:
                 reporter = SLGAReporter(db_path)
-                text_report = reporter.generate_text_report(secrets)
-                json_report = reporter.generate_json_report(secrets)
+                text_report = reporter.generate_text_report(secrets, scan_stats=scan_stats)
+                json_report = reporter.generate_json_report(secrets, scan_stats=scan_stats)
                 reporter.close()
                 
                 output_dir = self.context.reportout_dir or self.context.repo_path
@@ -607,7 +642,7 @@ class PipelineOrchestrator:
             
             if critical_correlations:
                 recommendations.append(
-                    f"🚨 CSCE: {len(critical_correlations)} CRITICAL correlation(s) detected - immediate action required!"
+                    f"CRITICAL: CSCE found {len(critical_correlations)} CRITICAL correlation(s) - immediate action required!"
                 )
                 
                 # Add top 3 critical recommendations
@@ -619,7 +654,7 @@ class PipelineOrchestrator:
             high_correlations = [p for p in top_priorities if p['severity'] == 'HIGH']
             if high_correlations:
                 recommendations.append(
-                    f"⚠️  CSCE: {len(high_correlations)} HIGH confidence correlation(s) require review"
+                    f"HIGH: CSCE found {len(high_correlations)} HIGH confidence correlation(s) requiring review"
                 )
         
         # SLGA recommendations
@@ -675,7 +710,156 @@ class PipelineOrchestrator:
                     f"Update dependencies to fix {dep_vuln_count} known vulnerabilities"
                 )
         
+        # Clean repo: provide positive confirmation so LLM has useful context
+        if not recommendations:
+            recommendations.append(
+                "PASS: No security issues detected. The repository appears clean."
+            )
+            if not self.results.get('slga_skipped'):
+                recommendations.append(
+                    "SLGA: No hardcoded secrets found in code or commit history."
+                )
+            if not self.results.get('hcrs_skipped'):
+                recommendations.append(
+                    "HCRS: No code-level security violations detected."
+                )
+        
         self.results['recommendations'] = recommendations
+    
+    def _build_llm_context(self) -> Dict[str, Any]:
+        """Build a structured summary designed for LLM-based remediation.
+
+        Returns a dict with a natural-language narrative plus key metrics
+        so an LLM can quickly understand what was found and what to fix.
+        """
+        engines_run = []
+        engines_skipped = []
+        for eng in ('slga', 'sdda', 'hcrs', 'csce'):
+            if self.results.get(f'{eng}_skipped', False):
+                engines_skipped.append(eng.upper())
+            else:
+                engines_run.append(eng.upper())
+
+        finding_bullets = []
+        slga = self.results.get('slga')
+        if slga:
+            n = slga.get('total_secrets', 0)
+            if n:
+                finding_bullets.append(f"SLGA detected {n} hardcoded secret(s) across {slga.get('total_files', 0)} file(s).")
+            else:
+                finding_bullets.append("SLGA: No hardcoded secrets detected.")
+
+        hcrs = self.results.get('hcrs')
+        if hcrs:
+            v = hcrs.get('total_violations', 0)
+            if v:
+                finding_bullets.append(
+                    f"HCRS found {v} code violation(s) — Critical: {hcrs.get('critical_count', 0)}, "
+                    f"High: {hcrs.get('high_count', 0)}, Medium: {hcrs.get('medium_count', 0)}, "
+                    f"Low: {hcrs.get('low_count', 0)}."
+                )
+            else:
+                finding_bullets.append("HCRS: No code violations detected.")
+            dep = hcrs.get('dependency_vulnerability_count', 0)
+            if dep:
+                finding_bullets.append(f"HCRS: {dep} dependency vulnerability/ies via OSV.")
+
+        sdda = self.results.get('sdda')
+        if sdda:
+            d = len(sdda.get('drifted_secrets', []))
+            if d:
+                finding_bullets.append(f"SDDA detected behavioral drift in {d} secret(s).")
+            else:
+                finding_bullets.append(f"SDDA: No secret drift detected ({sdda.get('baseline_status', 'OK')}).")
+
+        csce = self.results.get('csce')
+        if csce:
+            c = csce.get('total_correlations', 0)
+            if c:
+                finding_bullets.append(
+                    f"CSCE found {c} cross-engine correlation(s) — "
+                    f"Critical: {csce.get('critical_count', 0)}, High: {csce.get('high_count', 0)}."
+                )
+            else:
+                finding_bullets.append("CSCE: No cross-engine correlations found.")
+
+        is_clean = all(
+            not self.results.get(eng) or (
+                self.results[eng].get('total_secrets', 0) == 0
+                and self.results[eng].get('total_violations', 0) == 0
+                and self.results[eng].get('total_correlations', 0) == 0
+                and len(self.results[eng].get('drifted_secrets', [])) == 0
+            )
+            for eng in ('slga', 'hcrs', 'sdda', 'csce')
+        )
+
+        return {
+            'overall_status': self.results.get('recommendation', 'UNKNOWN'),
+            'is_clean_repo': is_clean,
+            'engines_executed': engines_run,
+            'engines_skipped': engines_skipped,
+            'findings_summary': finding_bullets,
+            'recommendations': self.results.get('recommendations', []),
+            'narrative': (
+                "The repository appears clean from a security perspective. "
+                "No hardcoded secrets, code violations, behavioral drift, or cross-engine "
+                "correlations were detected."
+            ) if is_clean else (
+                "Security findings require attention. See findings_summary and recommendations "
+                "for details. Prioritize CRITICAL and HIGH severity items first."
+            ),
+        }
+
+    def _format_sdda_text(self, sdda_result) -> str:
+        """Format SDDA results as a human-readable text report."""
+        lines = []
+        lines.append("=" * 72)
+        lines.append("SDDA - Secret Drift Detection Analysis Report")
+        lines.append("=" * 72)
+        lines.append("")
+
+        total = getattr(sdda_result, 'total_secrets_analyzed', 0)
+        baseline = getattr(sdda_result, 'baseline_status', 'UNKNOWN')
+        drifted = getattr(sdda_result, 'drifted_secrets', [])
+
+        lines.append(f"Secrets Analyzed:  {total}")
+        lines.append(f"Baseline Status:   {baseline}")
+        lines.append(f"Drifted Secrets:   {len(drifted)}")
+        lines.append("")
+
+        if drifted:
+            lines.append("-" * 72)
+            lines.append("DRIFT DETAILS")
+            lines.append("-" * 72)
+            for d in drifted:
+                lines.append(f"  Secret:   {d.secret_id}")
+                lines.append(f"  Severity: {d.severity}")
+                lines.append(f"  Score:    {d.total_drift_score:.4f}")
+                if d.anomaly_details:
+                    for dim, detail in d.anomaly_details.items():
+                        lines.append(f"    {dim}: {detail}")
+                lines.append("")
+        else:
+            lines.append("No behavioral drift detected.")
+            if total == 0:
+                lines.append("No secrets were provided for drift analysis.")
+            else:
+                lines.append(f"All {total} secret(s) are within expected behavioral baselines.")
+        lines.append("")
+
+        summary = getattr(sdda_result, 'summary', {})
+        if summary:
+            lines.append("-" * 72)
+            lines.append("SUMMARY")
+            lines.append("-" * 72)
+            for k, v in summary.items():
+                lines.append(f"  {k}: {v}")
+            lines.append("")
+
+        lines.append("=" * 72)
+        lines.append("End of SDDA Report")
+        lines.append("=" * 72)
+        return "\n".join(lines)
     
     def _determine_exit_code(self):
         """Determine appropriate exit code based on findings."""
