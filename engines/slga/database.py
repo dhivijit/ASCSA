@@ -532,7 +532,10 @@ class SLGADatabase:
         
         stats = {}
         
-        for table in ['secrets', 'files', 'commits', 'stages', 'logs', 'artifacts']:
+        _ALLOWED_TABLES = frozenset(['secrets', 'files', 'commits', 'stages', 'logs', 'artifacts'])
+        for table in _ALLOWED_TABLES:
+            # table names cannot be parameterised in SQLite; the
+            # frozenset above guarantees only known names are used.
             cursor.execute(f"SELECT COUNT(*) as count FROM {table}")
             stats[f'total_{table}'] = cursor.fetchone()['count']
         

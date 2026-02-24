@@ -73,6 +73,7 @@ class HCRSScanner:
         # Compute repository-level risk
         repo_score = compute_repository_risk_score(repo_path, file_scores)
         repo_score.dependency_vulnerabilities = dependency_vulns
+        repo_score.summary['dependency_vulnerability_count'] = len(dependency_vulns)
 
         # Enrich summary with scan coverage metadata
         repo_score.summary['scan_coverage'] = {
@@ -210,18 +211,19 @@ class HCRSScanner:
     def _scan_dependencies(self, repo_path: str) -> List[Dict]:
         """Scan dependency files for known vulnerabilities using OSV.
 
+        The list of files to check is read from
+        ``hcrs.dependency_files`` in the config.
+
         Returns:
             List of vulnerability dictionaries from OSV.
         """
         all_vulns = []
+        dep_files = self.config.get('dependency_files', [
+            'requirements.txt', 'package.json',
+            'package-lock.json', 'pyproject.toml',
+        ])
 
-        dep_files = {
-            'requirements.txt': 'requirements.txt',
-            'package.json': 'package.json',
-            'package-lock.json': 'package-lock.json'
-        }
-
-        for filename, basename in dep_files.items():
+        for filename in dep_files:
             file_path = os.path.join(repo_path, filename)
             if os.path.exists(file_path):
                 try:
@@ -229,7 +231,7 @@ class HCRSScanner:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         content = f.read()
 
-                    vulns = scan_dep_vulns(content, basename)
+                    vulns = scan_dep_vulns(content, filename)
                     all_vulns.extend(vulns)
 
                 except Exception as e:
@@ -244,5 +246,8 @@ class HCRSScanner:
 
     def _count_dep_files(self, repo_path: str) -> int:
         """Count how many dependency manifest files exist in the repo."""
-        dep_filenames = ['requirements.txt', 'package.json', 'package-lock.json']
-        return sum(1 for f in dep_filenames if os.path.exists(os.path.join(repo_path, f)))
+        dep_files = self.config.get('dependency_files', [
+            'requirements.txt', 'package.json',
+            'package-lock.json', 'pyproject.toml',
+        ])
+        return sum(1 for f in dep_files if os.path.exists(os.path.join(repo_path, f)))

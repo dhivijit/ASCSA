@@ -42,7 +42,13 @@ _DEFAULT_CONFIG = {
     'max_file_size_kb': 500,
     'max_files': 10000,
     'python_extensions': ['.py'],
-    'javascript_extensions': ['.js', '.jsx', '.ts', '.tsx', '.mjs']
+    'javascript_extensions': ['.js', '.jsx', '.ts', '.tsx', '.mjs'],
+    'dependency_files': [
+        'requirements.txt',
+        'package.json',
+        'package-lock.json',
+        'pyproject.toml',
+    ]
 }
 
 

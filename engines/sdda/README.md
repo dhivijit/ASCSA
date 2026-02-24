@@ -2,29 +2,68 @@
 
 ## Overview
 
-The **Secret Drift Detection Algorithm (SDDA)** detects behavioral anomalies in how secrets are used across CI/CD pipeline executions. It builds statistical baselines from historical usage patterns and identifies deviations that could indicate security issues, misconfigurations, or malicious activity.
+The **Secret Drift Detection Algorithm (SDDA)** detects changes and anomalies in how secrets appear and are used across CI/CD pipeline executions.
+
+SDDA operates in **two modes**:
+
+| Mode | Function | When to use |
+|------|----------|-------------|
+| **Git-Diff** (default) | `run_sdda_git_diff()` | Stateless CI/CD pipelines. Compares HEAD vs HEAD\~1 secret snapshots. No database required. |
+| **Baseline** (advanced) | `run_sdda()` | Long-running environments with persistent storage. Builds Z‑score baselines from 30+ historical pipeline runs. |
+
+The **orchestrator uses Git-Diff mode** by default — it is fully stateless and requires only a git repository with ≥ 2 commits.
 
 ## Key Features
 
-### 🎯 Behavioral Tracking
-- **Pipeline stages** - Which stages access each secret
-- **Access frequency** - How often secrets are used per run
-- **Actor identity** - Who/what triggers secret access (bots, users, services)
-- **Environment** - Dev, staging, production usage patterns
+### Git-Diff Mode (Production Default)
+- **ADDED** — new secret appeared at HEAD that was absent at HEAD\~1 (CRITICAL)
+- **REMOVED** — secret present at HEAD\~1 is gone at HEAD (LOW)
+- **MOVED** — same secret value exists at both commits but in different files (MEDIUM)
+- Zero external dependencies beyond GitPython
+- No persistent database needed
 
-### 📊 Statistical Drift Detection
+### Baseline Mode (Advanced)
+- **Pipeline stages** — which stages access each secret
+- **Access frequency** — how often secrets are used per run
+- **Actor identity** — who/what triggers secret access (bots, users, services)
+- **Environment** — dev, staging, production usage patterns
+
+### Statistical Drift Detection (Baseline Mode)
 - **Z-score based anomaly detection** - Industry-standard statistical method
 - **Rolling window baselines** - Adapts to legitimate changes over time
 - **Configurable thresholds** - Tune sensitivity to your needs
 - **Multi-signal correlation** - Combines multiple behavioral features
 
-### 🚨 Intelligent Alerting
+### Alerting
 - **Severity scoring** - LOW, MEDIUM, HIGH, CRITICAL
 - **Production awareness** - Critical alerts for unexpected prod usage
 - **Actionable recommendations** - Not just alerts, but guidance
 - **Low false positives** - Statistical rigor reduces noise
 
 ## Architecture
+
+### Git-Diff Mode (default — used by orchestrator)
+
+```
+┌─────────────────────┐     ┌─────────────────────┐
+│  SLGA secrets       │     │  SLGA secrets        │
+│  at HEAD            │     │  at HEAD~1           │
+└──────────┬──────────┘     └──────────┬───────────┘
+           │                           │
+           └──────────┬────────────────┘
+                      ▼
+             ┌────────────────┐
+             │ diff_snapshots │
+             │ (ADDED/REMOVED │
+             │  /MOVED)       │
+             └───────┬────────┘
+                     ▼
+             ┌────────────────┐
+             │  DriftReport   │
+             └────────────────┘
+```
+
+### Baseline Mode (advanced — requires persistent SQLite)
 
 ```
 ┌─────────────────────┐

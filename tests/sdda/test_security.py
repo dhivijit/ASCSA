@@ -28,18 +28,30 @@ class TestSecretEncryption:
         assert decrypted == plaintext
         assert ciphertext != plaintext
     
-    def test_encryption_deterministic_with_same_key(self):
-        """Same key should produce same encrypted output"""
+    def test_encryption_cross_decryption_with_same_key(self):
+        """Same password should decrypt ciphertext from another instance"""
         encryptor1 = SecretEncryption("password123")
         encryptor2 = SecretEncryption("password123")
         
         plaintext = "secret_value"
         
         encrypted1 = encryptor1.encrypt(plaintext)
-        encrypted2 = encryptor2.encrypt(plaintext)
         
-        # With same key, encryption should be reproducible
+        # Different instance, same password — must still decrypt
         assert encryptor2.decrypt(encrypted1) == plaintext
+    
+    def test_unique_salt_per_encrypt(self):
+        """Encrypting the same plaintext twice must produce different ciphertexts (unique salt)"""
+        encryptor = SecretEncryption("password123")
+        
+        ct1 = encryptor.encrypt("same_value")
+        ct2 = encryptor.encrypt("same_value")
+        
+        # Ciphertexts must differ due to random salt
+        assert ct1 != ct2
+        # Both must still round-trip
+        assert encryptor.decrypt(ct1) == "same_value"
+        assert encryptor.decrypt(ct2) == "same_value"
     
     def test_different_keys_produce_different_ciphertext(self):
         """Different keys should not decrypt each other's ciphertext"""
@@ -175,21 +187,6 @@ class TestInputValidator:
         
         for stage in valid_stages:
             assert InputValidator.validate_stage(stage)
-    
-    def test_sanitize_sql_value(self):
-        """Should remove SQL injection patterns"""
-        dangerous_inputs = [
-            "value'; DROP TABLE users--",
-            "value\" OR 1=1",
-            "value/*comment*/",
-            "value; DELETE FROM"
-        ]
-        
-        for dangerous in dangerous_inputs:
-            sanitized = InputValidator.sanitize_sql_value(dangerous)
-            assert "DROP" not in sanitized
-            assert "DELETE" not in sanitized
-            assert "--" not in sanitized
     
     def test_validate_path_safe(self):
         """Should accept safe file paths"""

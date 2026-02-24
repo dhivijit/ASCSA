@@ -1,10 +1,12 @@
 # Test CSCE - Basic unit tests
 import unittest
 from datetime import datetime
+from unittest.mock import MagicMock
 
 from engines.hcrs.models import SecurityViolation, Severity, ViolationType, CodeLocation
 from engines.slga.models import Secret
 from engines.sdda.models import DriftDetection
+from engines.sdda.git_drift_detector import GitDriftDetection, _sid
 from engines.csce import run_csce
 from engines.csce.models import CorrelationType, CorrelationSeverity
 
@@ -80,7 +82,9 @@ class TestCSCE(unittest.TestCase):
         self.assertGreaterEqual(secret_matches[0].confidence, 0.9)
     
     def test_behavioral_correlation(self):
-        """Test behavioral correlation (drift + code risk)"""
+        """Test behavioral correlation (drift + code risk) with git-diff mode data"""
+        secret_value = "deploy_key_abc123"
+
         violations = [
             SecurityViolation(
                 violation_type=ViolationType.COMMAND_INJECTION,
@@ -96,7 +100,7 @@ class TestCSCE(unittest.TestCase):
         
         secrets = [
             Secret(
-                value="deploy_key",
+                value=secret_value,
                 secret_type="api_key",
                 entropy=4.2,
                 files=["deploy.py"],
@@ -104,15 +108,17 @@ class TestCSCE(unittest.TestCase):
             )
         ]
         
+        # Use _sid() to produce the same hash the git-diff detector would
         drifts = [
-            DriftDetection(
-                secret_id="deploy_key",
+            GitDriftDetection(
+                secret_id=_sid(secret_value),
                 run_id="test_run",
                 timestamp=datetime.now(),
+                drift_type="ADDED",
                 severity="HIGH",
                 is_drifted=True,
                 total_drift_score=5.0,
-                anomaly_details=["New production usage"],
+                anomaly_details={"type": "ADDED", "files": ["deploy.py"]},
                 recommendation="Review access"
             )
         ]
@@ -125,6 +131,76 @@ class TestCSCE(unittest.TestCase):
         
         # Should be high/critical severity
         self.assertIn(behavioral[0].severity.value, ['HIGH', 'CRITICAL'])
+
+    def test_behavioral_correlation_mode1(self):
+        """Test behavioral correlation with baseline-mode DriftDetection (direct value match)"""
+        violations = [
+            SecurityViolation(
+                violation_type=ViolationType.COMMAND_INJECTION,
+                severity=Severity.HIGH,
+                location=CodeLocation(file_path="app.py", line_start=10, line_end=10),
+                message="injection"
+            )
+        ]
+        secrets = [
+            Secret(value="my_api_key", secret_type="api_key", entropy=4.0, files=["app.py"], lines=[10])
+        ]
+        drifts = [
+            DriftDetection(
+                secret_id="my_api_key",
+                run_id="run1",
+                timestamp=datetime.now(),
+                severity="HIGH",
+                is_drifted=True,
+                total_drift_score=4.0,
+                anomaly_details=["New actor detected"],
+                recommendation="Review"
+            )
+        ]
+        report = run_csce(violations, sdda_drifts=drifts, slga_secrets=secrets)
+        behavioral = [c for c in report.correlations if c.correlation_type == CorrelationType.BEHAVIORAL]
+        self.assertGreater(len(behavioral), 0)
+
+    def test_propagation_correlation(self):
+        """Test propagation correlation with a mock Neo4j graph"""
+        violations = [
+            SecurityViolation(
+                violation_type=ViolationType.SENSITIVE_LOGGING,
+                severity=Severity.HIGH,
+                location=CodeLocation(file_path="app.py", line_start=20, line_end=20),
+                message="Logging secret"
+            )
+        ]
+        secrets = [
+            Secret(value="prop_secret", secret_type="api_key", entropy=4.5, files=["app.py"], lines=[20])
+        ]
+
+        # Mock graph returning the real analyze_secret_propagation format
+        mock_graph = MagicMock()
+        mock_graph.analyze_secret_propagation.return_value = {
+            'secret_value': 'prop_secret',
+            'propagation_scope': {
+                'files': 3,
+                'commits': 5,
+                'stages': 2,
+                'logs': 1,
+                'artifacts': 0,
+            },
+            'file_paths': ['app.py', 'lib.py', 'util.py'],
+            'stage_names': ['build', 'deploy'],
+            'log_paths': ['ci.log'],
+            'artifact_paths': [],
+            'risk_score': 55,
+            'severity': 'HIGH',
+            'risk_factors': ['Moderate file spread: 3 files', 'EXPOSED in logs: 1 log file(s)'],
+        }
+
+        report = run_csce(violations, slga_secrets=secrets, neo4j_graph=mock_graph)
+
+        propagation = [c for c in report.correlations if c.correlation_type == CorrelationType.PROPAGATION]
+        self.assertGreater(len(propagation), 0)
+        self.assertEqual(propagation[0].severity, CorrelationSeverity.HIGH)
+        self.assertGreaterEqual(propagation[0].confidence, 0.9)
     
     def test_no_correlations(self):
         """Test when there are no correlations"""
@@ -180,6 +256,8 @@ class TestCSCE(unittest.TestCase):
     
     def test_severity_amplification(self):
         """Test that severity is amplified when multiple high signals combine"""
+        secret_value = "key_for_amplification_test"
+
         violations = [
             SecurityViolation(
                 violation_type=ViolationType.COMMAND_INJECTION,
@@ -190,18 +268,19 @@ class TestCSCE(unittest.TestCase):
         ]
         
         secrets = [
-            Secret(value="key", secret_type="api_key", entropy=4.5, files=["app.py"], lines=[10])
+            Secret(value=secret_value, secret_type="api_key", entropy=4.5, files=["app.py"], lines=[10])
         ]
         
         drifts = [
-            DriftDetection(
-                secret_id="key",
+            GitDriftDetection(
+                secret_id=_sid(secret_value),
                 run_id="test_run",
                 timestamp=datetime.now(),
+                drift_type="ADDED",
                 severity="CRITICAL",
                 is_drifted=True,
                 total_drift_score=100.0,
-                anomaly_details=["Secret used in PRODUCTION for first time"],
+                anomaly_details={"type": "ADDED", "files": ["app.py"], "note": "Secret used in PRODUCTION for first time"},
                 recommendation="Immediate action"
             )
         ]

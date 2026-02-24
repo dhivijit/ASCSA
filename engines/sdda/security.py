@@ -11,30 +11,32 @@ import base64
 
 class SecretEncryption:
     """Handles encryption/decryption of secrets in database"""
-    
+
+    _SALT_LENGTH = 16
+
     def __init__(self, encryption_key: Optional[str] = None):
         """
         Initialize encryption with a key.
         If no key provided, generates one from environment or creates new.
         """
         if encryption_key:
-            self.key = self._derive_key(encryption_key)
+            self._password = encryption_key
         else:
-            # Try to get key from environment
             env_key = os.environ.get('SDDA_ENCRYPTION_KEY')
             if env_key:
-                self.key = self._derive_key(env_key)
+                self._password = env_key
             else:
-                # Generate new key (should be stored securely)
-                self.key = Fernet.generate_key()
-        
-        self.cipher = Fernet(self.key)
-    
-    def _derive_key(self, password: str, salt: Optional[bytes] = None) -> bytes:
-        """Derive encryption key from password using PBKDF2"""
-        if salt is None:
-            salt = b'sdda_salt_v1'  # Fixed salt for deterministic key
-        
+                self._password = None
+
+        # When no password is provided, use a single random Fernet key
+        # (no PBKDF2 needed — the key itself is cryptographically random).
+        if self._password is None:
+            self._static_key = Fernet.generate_key()
+        else:
+            self._static_key = None
+
+    def _derive_key(self, password: str, salt: bytes) -> bytes:
+        """Derive encryption key from password using PBKDF2 with caller-supplied salt."""
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
@@ -42,23 +44,42 @@ class SecretEncryption:
             iterations=100000,
             backend=default_backend()
         )
-        key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
-        return key
-    
+        return base64.urlsafe_b64encode(kdf.derive(password.encode()))
+
     def encrypt(self, plaintext: str) -> str:
-        """Encrypt a secret value"""
+        """Encrypt a secret value.
+
+        When a password was provided, a fresh random salt is generated per
+        call and prepended to the ciphertext so that decrypt() can recover it.
+        """
         if not plaintext:
             return ""
-        encrypted = self.cipher.encrypt(plaintext.encode())
-        return base64.urlsafe_b64encode(encrypted).decode()
-    
+        if self._password is not None:
+            salt = os.urandom(self._SALT_LENGTH)
+            key = self._derive_key(self._password, salt)
+            cipher = Fernet(key)
+            encrypted = cipher.encrypt(plaintext.encode())
+            # Format: base64( salt || fernet_token )
+            return base64.urlsafe_b64encode(salt + encrypted).decode()
+        else:
+            cipher = Fernet(self._static_key)
+            encrypted = cipher.encrypt(plaintext.encode())
+            return base64.urlsafe_b64encode(encrypted).decode()
+
     def decrypt(self, ciphertext: str) -> str:
-        """Decrypt a secret value"""
+        """Decrypt a secret value."""
         if not ciphertext:
             return ""
-        decoded = base64.urlsafe_b64decode(ciphertext.encode())
-        decrypted = self.cipher.decrypt(decoded)
-        return decrypted.decode()
+        raw = base64.urlsafe_b64decode(ciphertext.encode())
+        if self._password is not None:
+            salt = raw[:self._SALT_LENGTH]
+            token = raw[self._SALT_LENGTH:]
+            key = self._derive_key(self._password, salt)
+            cipher = Fernet(key)
+            return cipher.decrypt(token).decode()
+        else:
+            cipher = Fernet(self._static_key)
+            return cipher.decrypt(raw).decode()
     
     def mask_secret(self, secret: str, show_chars: int = 4) -> str:
         """Mask a secret for safe display"""
@@ -119,18 +140,6 @@ class InputValidator:
         if not stage:
             return False
         return bool(InputValidator.STAGE_PATTERN.match(stage))
-    
-    @staticmethod
-    def sanitize_sql_value(value: str) -> str:
-        """Sanitize value for SQL (removes dangerous characters)"""
-        if not value:
-            return ""
-        # Remove SQL injection characters
-        dangerous = ["'", '"', ';', '--', '/*', '*/', 'xp_', 'sp_', 'DROP', 'DELETE', 'INSERT', 'UPDATE']
-        sanitized = value
-        for pattern in dangerous:
-            sanitized = sanitized.replace(pattern, '')
-        return sanitized
     
     @staticmethod
     def validate_path(path: str) -> bool:

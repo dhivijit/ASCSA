@@ -169,25 +169,27 @@ class LineageGraph:
             if 'APPEARS_IN_ARTIFACT' in existing_rels:
                 query_parts.append("OPTIONAL MATCH (s)-[:APPEARS_IN_ARTIFACT]->(a:Artifact)")
             
-            query_parts.append("""
-                RETURN 
-                    count(DISTINCT f) as file_count,
-                    count(DISTINCT c) as commit_count,
-                    {} as stage_count,
-                    {} as log_count,
-                    {} as artifact_count,
-                    collect(DISTINCT f.path) as files,
-                    {} as stages,
-                    {} as logs,
-                    {} as artifacts
-            """.format(
-                "count(DISTINCT st)" if 'USED_IN' in existing_rels else "0",
-                "count(DISTINCT l)" if 'APPEARS_IN_LOG' in existing_rels else "0",
-                "count(DISTINCT a)" if 'APPEARS_IN_ARTIFACT' in existing_rels else "0",
-                "collect(DISTINCT st.name)" if 'USED_IN' in existing_rels else "[]",
-                "collect(DISTINCT l.path)" if 'APPEARS_IN_LOG' in existing_rels else "[]",
-                "collect(DISTINCT a.path)" if 'APPEARS_IN_ARTIFACT' in existing_rels else "[]"
-            ))
+            # Build RETURN clause with safe conditional expressions
+            stage_count = "count(DISTINCT st)" if 'USED_IN' in existing_rels else "0"
+            log_count = "count(DISTINCT l)" if 'APPEARS_IN_LOG' in existing_rels else "0"
+            artifact_count = "count(DISTINCT a)" if 'APPEARS_IN_ARTIFACT' in existing_rels else "0"
+            stages_collect = "collect(DISTINCT st.name)" if 'USED_IN' in existing_rels else "[]"
+            logs_collect = "collect(DISTINCT l.path)" if 'APPEARS_IN_LOG' in existing_rels else "[]"
+            artifacts_collect = "collect(DISTINCT a.path)" if 'APPEARS_IN_ARTIFACT' in existing_rels else "[]"
+            
+            return_clause = (
+                "RETURN \n"
+                "    count(DISTINCT f) as file_count,\n"
+                "    count(DISTINCT c) as commit_count,\n"
+                f"    {stage_count} as stage_count,\n"
+                f"    {log_count} as log_count,\n"
+                f"    {artifact_count} as artifact_count,\n"
+                "    collect(DISTINCT f.path) as files,\n"
+                f"    {stages_collect} as stages,\n"
+                f"    {logs_collect} as logs,\n"
+                f"    {artifacts_collect} as artifacts"
+            )
+            query_parts.append(return_clause)
             
             # Get propagation scope
             scope_result = session.run("\n".join(query_parts), value=secret_value)

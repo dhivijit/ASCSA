@@ -20,6 +20,7 @@ from pathlib import Path
 from .models import Correlation, CorrelationReport, CorrelationType, CorrelationSeverity
 from engines.hcrs.models import SecurityViolation, Severity as HCRSSeverity
 from engines.sdda.models import DriftReport, DriftDetection
+from engines.sdda.git_drift_detector import GitDriftDetection, _sid
 from engines.slga.models import Secret
 
 logger = logging.getLogger(__name__)
@@ -200,19 +201,19 @@ class CorrelationEngine:
         """Correlate secret drift with code violations"""
         logger.debug("Running behavioral correlation...")
         
+        # Build a lookup: sid-hash → secret for git-diff mode matching
+        sid_to_secret = {_sid(s.value): s for s in secrets}
+
         for drift in drifts:
-            # Find the secret object
-            matching_secrets = [
-                s for s in secrets 
-                if s.value == drift.secret_id or 
-                drift.secret_id in str(s.value) or
-                str(s.value)[:20] in drift.secret_id
-            ]
-            
-            if not matching_secrets:
+            # Match drift.secret_id to a Secret object.
+            # Git-diff mode: secret_id is _sid(value); baseline mode: secret_id is the raw id.
+            secret = sid_to_secret.get(drift.secret_id)
+            if secret is None:
+                # Fallback: direct value match (baseline / Mode-1 DriftDetection)
+                matches = [s for s in secrets if s.value == drift.secret_id]
+                secret = matches[0] if matches else None
+            if secret is None:
                 continue
-            
-            secret = matching_secrets[0]
             
             # Find violations in files containing this secret
             for file_path in secret.files:
@@ -228,8 +229,15 @@ class CorrelationEngine:
                         max([v.severity.value for v in file_violations])
                     )
                     
-                    # Check for critical combinations
-                    anomaly_details_str = drift.anomaly_details if isinstance(drift.anomaly_details, str) else ' '.join(drift.anomaly_details)
+                    # Normalise anomaly_details to a string regardless of type
+                    ad = drift.anomaly_details
+                    if isinstance(ad, dict):
+                        anomaly_details_str = ' '.join(str(v) for v in ad.values())
+                    elif isinstance(ad, list):
+                        anomaly_details_str = ' '.join(str(x) for x in ad)
+                    else:
+                        anomaly_details_str = str(ad)
+
                     is_production_drift = 'production' in anomaly_details_str.lower()
                     has_critical_violation = any(
                         v.severity.value == 'CRITICAL' 
@@ -239,6 +247,14 @@ class CorrelationEngine:
                     if is_production_drift and has_critical_violation:
                         severity = CorrelationSeverity.CRITICAL
                     
+                    # Normalise evidence value for details
+                    if isinstance(ad, dict):
+                        evidence_details = {k: str(v) for k, v in ad.items()}
+                    elif isinstance(ad, list):
+                        evidence_details = ', '.join(str(x) for x in ad)
+                    else:
+                        evidence_details = str(ad)
+
                     correlation = Correlation(
                         correlation_id=f"BEHAVIORAL_{len(self.correlations)}",
                         correlation_type=CorrelationType.BEHAVIORAL,
@@ -253,7 +269,7 @@ class CorrelationEngine:
                         description=f"Secret drift detected with {len(file_violations)} code violation(s)",
                         evidence={
                             'drift_severity': drift.severity,
-                            'drift_details': drift.anomaly_details if isinstance(drift.anomaly_details, str) else ', '.join(drift.anomaly_details),
+                            'drift_details': evidence_details,
                             'violations': [v.violation_type.value for v in file_violations],
                             'file': file_path,
                             'is_production': is_production_drift
@@ -274,7 +290,7 @@ class CorrelationEngine:
         logger.debug("Running propagation correlation...")
         
         try:
-            # Query graph for secrets with long propagation chains
+            # Query graph for secrets with significant propagation
             for secret in secrets:
                 # Find files with violations
                 violation_files = {v.location.file_path for v in violations}
@@ -287,7 +303,18 @@ class CorrelationEngine:
                     # Use Neo4j to check propagation path
                     try:
                         analysis = neo4j_graph.analyze_secret_propagation(secret.value)
-                        if analysis and analysis.get('propagation_depth', 0) > 2:
+                        if not analysis:
+                            continue
+
+                        risk_score = analysis.get('risk_score', 0)
+                        scope = analysis.get('propagation_scope', {})
+                        # Derive a depth proxy from the propagation scope
+                        propagation_depth = sum(
+                            1 for k in ('files', 'stages', 'logs', 'artifacts')
+                            if scope.get(k, 0) > 0
+                        )
+
+                        if risk_score > 30 or propagation_depth > 2:
                             correlation = Correlation(
                                 correlation_id=f"PROPAGATION_{len(self.correlations)}",
                                 correlation_type=CorrelationType.PROPAGATION,
@@ -295,10 +322,11 @@ class CorrelationEngine:
                                 confidence=0.9,
                                 hcrs_violation_ids=[str(f) for f in intersection],
                                 slga_secret_ids=[secret.value[:20] + "..."],
-                                description=f"Secret propagated through {analysis['propagation_depth']} stages",
+                                description=f"Secret propagated across {propagation_depth} scope(s) (risk score {risk_score})",
                                 evidence={
-                                    'propagation_depth': analysis['propagation_depth'],
-                                    'stages': analysis.get('stages', []),
+                                    'risk_score': risk_score,
+                                    'propagation_depth': propagation_depth,
+                                    'propagation_scope': scope,
                                     'severity': analysis.get('severity', 'UNKNOWN'),
                                     'files_affected': list(intersection)
                                 },
@@ -306,7 +334,7 @@ class CorrelationEngine:
                             )
                             
                             self.correlations.append(correlation)
-                            logger.info(f"Found PROPAGATION correlation for secret with depth {analysis['propagation_depth']}")
+                            logger.info(f"Found PROPAGATION correlation for secret with risk score {risk_score}")
                     except Exception as e:
                         logger.warning(f"Failed to analyze propagation for secret: {e}")
         

@@ -59,6 +59,13 @@ hcrs:
     - .ts
     - .tsx
     - .mjs
+
+  # Dependency files to scan for known vulnerabilities (OSV)
+  dependency_files:
+    - requirements.txt
+    - package.json
+    - package-lock.json
+    - pyproject.toml
     
 # SLGA - Secret Lineage Graph Configuration (future)
 slga:
