@@ -35,9 +35,24 @@ ALL_SCANNABLE_EXTENSIONS = CODE_EXTENSIONS | CONFIG_EXTENSIONS | SCRIPT_EXTENSIO
 
 SECRET_REGEXES = [
     re.compile(r'(?i)(api[_-]?key|secret|token|password|passwd|access[_-]?key)["\']?\s*[:=]\s*["\']([^"\']{8,})["\']'),
-    re.compile(r'AKIA[0-9A-Z]{16}'),  # AWS Access Key
-    re.compile(r'sk_live_[0-9a-zA-Z]{24,}'),  # Stripe
-    re.compile(r'ghp_[0-9a-zA-Z]{36,}'),  # GitHub token
+    re.compile(r'AKIA[0-9A-Z]{16}'),                                         # AWS Access Key
+    re.compile(r'sk_live_[0-9a-zA-Z]{24,}'),                                  # Stripe live key
+    re.compile(r'sk_test_[0-9a-zA-Z]{24,}'),                                  # Stripe test key
+    re.compile(r'ghp_[0-9a-zA-Z]{36,}'),                                      # GitHub classic PAT
+    re.compile(r'github_pat_[A-Za-z0-9_]{82}'),                               # GitHub fine-grained PAT
+    re.compile(r'gho_[0-9a-zA-Z]{36,}'),                                      # GitHub OAuth token
+    re.compile(r'ghs_[0-9a-zA-Z]{36,}'),                                      # GitHub Actions token
+    re.compile(r'npm_[A-Za-z0-9]{36}'),                                       # npm token
+    re.compile(r'xoxb-[0-9]{11}-[0-9]{11}-[a-zA-Z0-9]{24}'),                 # Slack bot token
+    re.compile(r'xoxp-[0-9A-Za-z\-]+'),                                      # Slack user token
+    re.compile(r'AIza[0-9A-Za-z\-_]{35}'),                                   # Google API key
+    re.compile(r'AC[a-zA-Z0-9]{32}'),                                         # Twilio account SID
+    re.compile(r'SG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}'),            # SendGrid key
+    re.compile(r'hvs\.[A-Za-z0-9_\-]{90,}'),                                # HashiCorp Vault token
+    re.compile(r'-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'),            # Private key block
+    re.compile(r'eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_.+/=]*'),  # JWT
+    re.compile(r'DefaultEndpointsProtocol=https;AccountName=[^;]+;'),          # Azure storage connection string
+    re.compile(r'"type"\s*:\s*"service_account"'),                          # GCP service account JSON
 ]
 
 # Patterns indicating the line is likely a false positive (comment, test fixture, placeholder)

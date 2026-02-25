@@ -31,7 +31,105 @@ python_rules:
     weight: 100
     enabled: true
     confidence: 1.0
-  
+
+  - rule_id: PY-SEC-003
+    name: GitHub Personal Access Token
+    violation_type: hardcoded_secret
+    severity: CRITICAL
+    pattern_type: regex
+    pattern: 'ghp_[0-9a-zA-Z]{36,}|github_pat_[A-Za-z0-9_]{82}|gho_[0-9a-zA-Z]{36,}|ghs_[0-9a-zA-Z]{36,}'
+    message: "GitHub token detected"
+    description: "GitHub tokens (PAT, OAuth, Actions) should not be committed to source code"
+    cwe_id: "CWE-798"
+    recommendation: "Use GitHub Secrets or environment variables for GitHub tokens"
+    weight: 100
+    enabled: true
+    confidence: 1.0
+
+  - rule_id: PY-SEC-004
+    name: Stripe API Key
+    violation_type: hardcoded_secret
+    severity: CRITICAL
+    pattern_type: regex
+    pattern: 'sk_live_[0-9a-zA-Z]{24,}|sk_test_[0-9a-zA-Z]{24,}'
+    message: "Stripe API key detected"
+    description: "Stripe secret keys should never be committed to source code"
+    cwe_id: "CWE-798"
+    recommendation: "Use environment variables for Stripe keys. Rotate immediately if exposed."
+    weight: 100
+    enabled: true
+    confidence: 1.0
+
+  - rule_id: PY-SEC-005
+    name: Google API Key
+    violation_type: hardcoded_secret
+    severity: CRITICAL
+    pattern_type: regex
+    pattern: 'AIza[0-9A-Za-z\-_]{35}'
+    message: "Google API key detected"
+    description: "Google API keys should not be committed to source code"
+    cwe_id: "CWE-798"
+    recommendation: "Use Google Secret Manager or environment variables"
+    weight: 100
+    enabled: true
+    confidence: 1.0
+
+  - rule_id: PY-SEC-006
+    name: Slack Token
+    violation_type: hardcoded_secret
+    severity: CRITICAL
+    pattern_type: regex
+    pattern: 'xoxb-[0-9]{11}-[0-9]{11}-[a-zA-Z0-9]{24}|xoxp-[0-9A-Za-z\-]+'
+    message: "Slack token detected"
+    description: "Slack bot or user tokens should not be committed to source code"
+    cwe_id: "CWE-798"
+    recommendation: "Use environment variables for Slack tokens and rotate immediately if exposed"
+    weight: 100
+    enabled: true
+    confidence: 1.0
+
+  - rule_id: PY-SEC-007
+    name: npm Access Token
+    violation_type: hardcoded_secret
+    severity: CRITICAL
+    pattern_type: regex
+    pattern: 'npm_[A-Za-z0-9]{36}'
+    message: "npm access token detected"
+    description: "npm tokens should not be committed to source code"
+    cwe_id: "CWE-798"
+    recommendation: "Use environment variables or .npmrc with token from CI secrets"
+    weight: 100
+    enabled: true
+    confidence: 1.0
+
+  - rule_id: PY-SEC-008
+    name: SendGrid API Key
+    violation_type: hardcoded_secret
+    severity: CRITICAL
+    pattern_type: regex
+    pattern: 'SG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}'
+    message: "SendGrid API key detected"
+    description: "SendGrid API keys should not be committed to source code"
+    cwe_id: "CWE-798"
+    recommendation: "Use environment variables for SendGrid keys"
+    weight: 100
+    enabled: true
+    confidence: 1.0
+
+  - rule_id: PY-SEC-009
+    name: Private Key Block
+    violation_type: hardcoded_secret
+    severity: CRITICAL
+    pattern_type: regex
+    pattern: '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
+    message: "Private key detected in source code"
+    description: "Private keys (RSA, EC, OpenSSH) must never be committed to source code"
+    cwe_id: "CWE-321"
+    recommendation: "Remove the private key from source immediately and rotate it. Use a secrets manager."
+    weight: 100
+    enabled: true
+    confidence: 1.0
+
   # Command Injection
   - rule_id: PY-SEC-010
     name: OS Command Injection
