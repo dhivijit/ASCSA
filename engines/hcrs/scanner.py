@@ -13,8 +13,8 @@ from typing import List, Tuple, Dict
 from .models import FileRiskScore, RepositoryRiskScore
 from .config_loader import load_hcrs_config, should_analyze_file
 from .rule_loader import RuleLoader
-from .python_analyzer import PythonSimpleAnalyzer
-from .javascript_analyzer import JavaScriptAnalyzer
+from .python_analyzer import PythonAnalyzer, PythonSimpleAnalyzer
+from .javascript_analyzer import JavaScriptTreeSitterAnalyzer
 from .risk_engine import compute_file_risk_score, compute_repository_risk_score
 from .osv_scanner import scan_dep_vulns
 
@@ -33,8 +33,12 @@ class HCRSScanner:
         python_rules = self.rule_loader.get_rules_for_language('python')
         javascript_rules = self.rule_loader.get_rules_for_language('javascript')
 
-        self.python_analyzer = PythonSimpleAnalyzer(python_rules)
-        self.javascript_analyzer = JavaScriptAnalyzer(javascript_rules)
+        # Prefer tree-sitter analyzers; fall back to simple analyzers if the
+        # parser fails to initialise (e.g. language packages not installed).
+        py_analyzer = PythonAnalyzer(python_rules)
+        self.python_analyzer = py_analyzer if py_analyzer.parser else PythonSimpleAnalyzer(python_rules)
+
+        self.javascript_analyzer = JavaScriptTreeSitterAnalyzer(javascript_rules)
 
     def scan_repository(self, repo_path: str) -> RepositoryRiskScore:
         """Scan entire repository for security vulnerabilities.

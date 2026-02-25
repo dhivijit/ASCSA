@@ -231,7 +231,7 @@ def dangerous_endpoint(user_data, command, filename):
         expected_types = {
             ViolationType.HARDCODED_SECRET,
             ViolationType.COMMAND_INJECTION,
-            ViolationType.DESERIALIZATION
+            ViolationType.UNSAFE_DESERIALIZATION
         }
         self.assertTrue(expected_types.issubset(violation_types) or len(violation_types) >= 3)
         
