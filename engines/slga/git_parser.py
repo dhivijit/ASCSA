@@ -86,6 +86,13 @@ def get_all_commits(repo_path, max_count=None, fetch_content=False):
 				commit_obj.changed_files = [d.a_path or d.b_path for d in diff]
 				commit_obj.files = commit_obj.changed_files  # Update files list
 				commit_obj.secrets_found = _scan_diff_for_secrets(commit_obj.diff)
+				# Also scan the commit message itself
+				msg_secrets = _scan_text_for_secrets(commit_obj.message or '')
+				for s in msg_secrets:
+					if s not in commit_obj.secrets_found:
+						commit_obj.secrets_found.append(s)
+				if msg_secrets:
+					commit_obj.message_secrets = msg_secrets
 			except Exception as e:
 				# Handle errors gracefully
 				pass
@@ -105,6 +112,25 @@ def _extract_diff_text(diff):
 			pass
 	return '\n'.join(diff_text)
 
+def _scan_text_for_secrets(text: str) -> list:
+	"""Scan arbitrary text (e.g. commit message) for secrets."""
+	if not text:
+		return []
+	found = []
+	for line in text.split('\n'):
+		for regex in SECRET_REGEXES:
+			for match in regex.finditer(line):
+				if match.lastindex and match.lastindex >= 2:
+					value = match.group(match.lastindex)
+				elif match.lastindex == 1:
+					value = match.group(1)
+				else:
+					value = match.group(0)
+				entropy = shannon_entropy(value)
+				if entropy > 3.5 or len(value) > 12:
+					found.append(value)
+	return list(set(found))
+
 def _scan_diff_for_secrets(diff_text):
 	"""Scan diff text for secrets using SECRET_REGEXES."""
 	if not diff_text:
@@ -118,9 +144,15 @@ def _scan_diff_for_secrets(diff_text):
 			
 		for regex in SECRET_REGEXES:
 			for match in regex.finditer(line):
-				value = match.group(2) if match.lastindex and match.lastindex >= 2 else match.group(0)
+				if match.lastindex and match.lastindex >= 2:
+					value = match.group(match.lastindex)
+				elif match.lastindex == 1:
+					value = match.group(1)
+				else:
+					value = match.group(0)
 				entropy = shannon_entropy(value)
 				if entropy > 3.5 or len(value) > 12:
 					secrets_found.append(value)
 					
 	return list(set(secrets_found))  # Remove duplicates
+

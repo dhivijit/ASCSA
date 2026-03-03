@@ -10,6 +10,10 @@ class Secret:
 	files: List[str] = field(default_factory=list)
 	lines: List[int] = field(default_factory=list)
 	commits: List[str] = field(default_factory=list)
+	path_context: str = 'production'  # 'production' | 'test'
+	commit_first_seen: Optional[str] = None   # earliest commit hash where value appeared
+	commit_last_seen: Optional[str] = None    # most recent commit hash where value appeared
+	source: str = 'file'  # 'file' | 'commit_history' | 'commit_message'
 
 @dataclass
 class File:

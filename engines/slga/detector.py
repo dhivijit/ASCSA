@@ -10,7 +10,9 @@ even when no secrets are found.
 """
 import os
 import re
+import json
 import math
+import base64
 from typing import List, Dict, Tuple, Any
 from .models import Secret
 
@@ -34,11 +36,15 @@ SKIP_FILES = {
 
 # File extensions to scan for secrets, grouped by category
 CODE_EXTENSIONS = {'.py', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
-CONFIG_EXTENSIONS = {'.yaml', '.yml', '.json', '.toml', '.cfg', '.ini', '.xml', '.properties'}
+CONFIG_EXTENSIONS = {'.yaml', '.yml', '.json', '.toml', '.cfg', '.ini', '.xml', '.properties',
+                     '.tf', '.tfvars', '.hcl'}  # Terraform/HCL added
 SCRIPT_EXTENSIONS = {'.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd'}
 SPECIAL_FILES = {'Dockerfile', '.dockerignore', '.env', '.env.local', '.env.production',
-                 '.env.development', '.env.example', '.gitignore'}
-ALL_SCANNABLE_EXTENSIONS = CODE_EXTENSIONS | CONFIG_EXTENSIONS | SCRIPT_EXTENSIONS
+                 '.env.development', '.env.example', '.gitignore',
+                 '.npmrc', '.pypirc', '.netrc', '.pgpass',  # Auth config files
+                 'terraform.tfvars', 'terraform.tfstate'}   # Terraform state (often committed accidentally)
+NOTEBOOK_EXTENSIONS = {'.ipynb'}  # Jupyter notebooks — scanned specially (JSON with output cells)
+ALL_SCANNABLE_EXTENSIONS = CODE_EXTENSIONS | CONFIG_EXTENSIONS | SCRIPT_EXTENSIONS | NOTEBOOK_EXTENSIONS
 
 SECRET_REGEXES = [
     # --- Generic keyword-based patterns ---
@@ -80,9 +86,9 @@ SECRET_REGEXES = [
 
     # --- Slack ---
     re.compile(r'xoxb-[0-9]{11}-[0-9]{11}-[a-zA-Z0-9]{24}'),                 # Slack bot token
-    re.compile(r'xoxp-[0-9A-Za-z\-]+'),                                       # Slack user token
-    re.compile(r'xoxa-[0-9A-Za-z\-]+'),                                       # Slack app-level token
-    re.compile(r'xoxr-[0-9A-Za-z\-]+'),                                       # Slack refresh token
+    re.compile(r'xoxp-[0-9A-Za-z\-]{70,}'),                                   # Slack user token (min 70 chars)
+    re.compile(r'xoxa-[0-9A-Za-z\-]{70,}'),                                   # Slack app-level token
+    re.compile(r'xoxr-[0-9A-Za-z\-]{70,}'),                                   # Slack refresh token
 
     # --- Google / GCP ---
     re.compile(r'AIza[0-9A-Za-z\-_]{35}'),                                    # Google API key
@@ -129,6 +135,23 @@ SECRET_REGEXES = [
     re.compile(r'[MNO][a-zA-Z0-9]{23}\.[a-zA-Z0-9\-_]{6}\.[a-zA-Z0-9\-_]{27}'),  # Discord bot token
     re.compile(r'[0-9]{8,10}:[a-zA-Z0-9_\-]{35}'),                            # Telegram bot token
 
+    # --- Docker build-arg secrets in CI configs ---
+    re.compile(r'--build-arg\s+([A-Z_]{3,}(?:KEY|SECRET|TOKEN|PASSWORD|PASS|PWD))=([^\s\'"]{8,})'),  # --build-arg SECRET=value
+
+    # --- Kubernetes Secret manifests ---
+    # base64-encoded values in a k8s Secret data block are NOT real secrets by themselves,
+    # but the field name + base64 value pattern is worth flagging for review
+    re.compile(r'(?i)kind:\s*Secret[\s\S]{0,500}?data:\s*\n((?:\s+\S+:\s*[A-Za-z0-9+/]{16,}={0,2}\n)+)',
+               re.MULTILINE),  # K8s Secret manifest
+
+    # --- Terraform / HCL hardcoded values ---
+    re.compile(r'(?i)(password|secret|access_key|secret_key|token|api_key)\s*=\s*"([^"]{8,})"'),  # TF string assignment
+
+    # --- .npmrc / .netrc auth tokens ---
+    re.compile(r'(?i)(//[^:]+:_authToken|//[^:]+:_password)\s*=\s*(.{8,})'),  # .npmrc registry token
+    re.compile(r'(?i)^\s*password\s+(.{8,})$'),                               # .netrc password line
+    re.compile(r'(?i)^\s*password\s*=\s*(.{8,})$'),                           # .pypirc password
+
     # --- New Relic ---
     re.compile(r'NRAK-[A-Z0-9]{27}'),                                          # New Relic user key
     re.compile(r'[a-zA-Z0-9]{40}NRAL'),                                        # New Relic license key
@@ -164,6 +187,21 @@ COMMENT_PATTERNS = {
     '.properties': re.compile(r'^\s*[#!]'),
     '.xml': re.compile(r'^\s*<!--'),
 }
+
+
+# Maximum file size to scan (bytes) — skip minified/binary blobs
+_MAX_FILE_BYTES = 2 * 1024 * 1024  # 2 MB
+
+# Path segments that indicate a test/mock/fixture context — lower severity
+TEST_PATH_PATTERNS = re.compile(
+    r'(?i)([\\/]|^)(test[s]?|spec[s]?|__test__|__mocks__|__fixtures__|'  
+    r'fixtures?|mocks?|fakes?|stubs?|samples?|demo[s]?|example[s]?)([\\/]|$)'
+)
+
+
+def get_path_context(filepath: str) -> str:
+    """Return 'test' if the path looks like a test/mock/fixture context, else 'production'."""
+    return 'test' if TEST_PATH_PATTERNS.search(filepath) else 'production'
 
 
 def shannon_entropy(data: str) -> float:
@@ -229,7 +267,28 @@ def _scan_file_for_secrets(filepath: str, secrets: List[Secret], scan_stats: Dic
     This is the shared core scanning loop used by all scan phases (code files,
     CI config, logs/artifacts) to eliminate duplication.
     """
+    # File size guard — skip very large files (minified bundles, binaries accidentally committed)
+    try:
+        if os.path.getsize(filepath) > _MAX_FILE_BYTES:
+            scan_stats.setdefault('files_skipped_too_large', 0)
+            scan_stats['files_skipped_too_large'] += 1
+            return
+    except OSError:
+        return
+
     file_ext = _get_file_extension(filepath)
+
+    # Jupyter notebooks — parse JSON and scan source + output cells specially
+    if file_ext == '.ipynb':
+        _scan_notebook_for_secrets(filepath, secrets, scan_stats)
+        return
+
+    # Terraform state files — parse JSON, look only inside "value" fields
+    if filepath.endswith('.tfstate') or filepath.endswith('.tfstate.backup'):
+        _scan_tfstate_for_secrets(filepath, secrets, scan_stats)
+        return
+
+    path_context = get_path_context(filepath)
     try:
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             for i, line in enumerate(f, 1):
@@ -255,10 +314,108 @@ def _scan_file_for_secrets(filepath: str, secrets: List[Secret], scan_stats: Dic
                                 entropy=entropy,
                                 files=[filepath],
                                 lines=[i],
-                                commits=[]
+                                commits=[],
+                                path_context=path_context,
                             ))
     except Exception:
         scan_stats['files_skipped_errors'] += 1
+
+
+def _scan_notebook_for_secrets(
+    filepath: str, secrets: List[Secret], scan_stats: Dict[str, Any]
+) -> None:
+    """Scan a Jupyter notebook (.ipynb) for secrets in source and output cells."""
+    path_context = get_path_context(filepath)
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            nb = json.load(f)
+    except Exception:
+        scan_stats['files_skipped_errors'] += 1
+        return
+
+    lines_to_scan: List[tuple] = []  # (line_number, text)
+    line_num = 0
+    for cell in nb.get('cells', []):
+        # Source lines
+        for src_line in cell.get('source', []):
+            line_num += 1
+            lines_to_scan.append((line_num, src_line))
+        # Output cells (stdout, text, data)
+        for output in cell.get('outputs', []):
+            for text_line in output.get('text', []):
+                line_num += 1
+                lines_to_scan.append((line_num, text_line))
+            for _mime, content in output.get('data', {}).items():
+                if isinstance(content, list):
+                    for text_line in content:
+                        line_num += 1
+                        lines_to_scan.append((line_num, text_line))
+                elif isinstance(content, str):
+                    line_num += 1
+                    lines_to_scan.append((line_num, content))
+
+    for i, line in lines_to_scan:
+        for regex in SECRET_REGEXES:
+            for match in regex.finditer(line):
+                if match.lastindex and match.lastindex >= 2:
+                    value = match.group(match.lastindex)
+                elif match.lastindex == 1:
+                    value = match.group(1)
+                else:
+                    value = match.group(0)
+                entropy = shannon_entropy(value)
+                if entropy > 3.5 or len(value) > 12:
+                    if _is_false_positive(value, line, '.ipynb'):
+                        scan_stats['false_positives_filtered'] += 1
+                        continue
+                    secrets.append(Secret(
+                        value=value,
+                        secret_type=regex.pattern,
+                        entropy=entropy,
+                        files=[filepath],
+                        lines=[i],
+                        commits=[],
+                        path_context=path_context,
+                    ))
+
+
+def _scan_tfstate_for_secrets(
+    filepath: str, secrets: List[Secret], scan_stats: Dict[str, Any]
+) -> None:
+    """Scan a Terraform state file for secrets in resource output values."""
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            state = json.load(f)
+    except Exception:
+        scan_stats['files_skipped_errors'] += 1
+        return
+
+    def _walk_state(obj, path_parts):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                _walk_state(v, path_parts + [str(k)])
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk_state(item, path_parts)
+        elif isinstance(obj, str) and len(obj) >= 8:
+            key_context = path_parts[-1].lower() if path_parts else ''
+            sensitive_keys = {'password', 'secret', 'token', 'key', 'credential',
+                              'private_key', 'access_key', 'auth', 'api_key'}
+            if not any(sk in key_context for sk in sensitive_keys):
+                return
+            entropy = shannon_entropy(obj)
+            if entropy > 3.5:
+                secrets.append(Secret(
+                    value=obj,
+                    secret_type='terraform_state_value',
+                    entropy=entropy,
+                    files=[filepath],
+                    lines=[0],
+                    commits=[],
+                    path_context='production',
+                ))
+
+    _walk_state(state, [])
 
 
 def detect_secrets(
@@ -309,6 +466,12 @@ def detect_secrets(
                 scan_stats['files_scanned'] += 1
                 scan_stats['files_by_type'][ext] = scan_stats['files_by_type'].get(ext, 0) + 1
                 _scan_file_for_secrets(filepath, secrets, scan_stats)
+            # Also catch .tfstate files regardless of normal extension filter
+            elif filename.endswith('.tfstate') or filename.endswith('.tfstate.backup'):
+                filepath = os.path.join(root, filename)
+                scan_stats['files_scanned'] += 1
+                scan_stats['files_by_type']['.tfstate'] = scan_stats['files_by_type'].get('.tfstate', 0) + 1
+                _scan_tfstate_for_secrets(filepath, secrets, scan_stats)
 
     # Phase 2: Scan CI/CD config file
     if ci_config_path and os.path.exists(ci_config_path):

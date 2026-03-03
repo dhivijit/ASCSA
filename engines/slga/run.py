@@ -68,21 +68,37 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None,
         logger.info(f"Scanned {len(all_commits)} commits")
         scan_stats['commits_scanned'] = len(all_commits)
         
-        # Extract secrets found in commits
+        # Extract secrets found in commits — deduplicate by value, track first/last seen
+        commit_secret_map: dict = {}  # value -> Secret
         for commit in all_commits:
             if commit.secrets_found:
+                is_msg_only = hasattr(commit, 'message_secrets') and commit.secrets_found == getattr(commit, 'message_secrets', [])
                 for secret_value in commit.secrets_found:
-                    from .models import Secret
-                    commit_secret = Secret(
-                        value=secret_value,
-                        secret_type="commit_history",
-                        entropy=4.0,
-                        files=[],
-                        lines=[],
-                        commits=[commit.hash]
-                    )
-                    commit_secrets.append(commit_secret)
-                    logger.info(f"Found secret in commit {commit.hash[:8]}: {secret_value[:20]}...")
+                    source = 'commit_message' if (hasattr(commit, 'message_secrets')
+                                                  and secret_value in commit.message_secrets
+                                                  and secret_value not in _get_diff_only_secrets(commit)) \
+                             else 'commit_history'
+                    if secret_value not in commit_secret_map:
+                        from .models import Secret
+                        commit_secret_map[secret_value] = Secret(
+                            value=secret_value,
+                            secret_type=source,
+                            entropy=4.0,
+                            files=[],
+                            lines=[],
+                            commits=[commit.hash],
+                            source=source,
+                            commit_first_seen=commit.hash,
+                            commit_last_seen=commit.hash,
+                        )
+                        logger.info(f"Found secret in commit {commit.hash[:8]}: {secret_value[:20]}...")
+                    else:
+                        existing = commit_secret_map[secret_value]
+                        if commit.hash not in existing.commits:
+                            existing.commits.append(commit.hash)
+                        existing.commit_last_seen = commit.hash  # iter_commits is newest-first
+
+        commit_secrets = list(commit_secret_map.values())
         
         # Group commits by file for existing file-based secrets
         for secret in secrets:
@@ -99,7 +115,11 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None,
                         commit_hashes.add(commit.hash)
             secret.commits = list(commit_hashes)
                     
-        logger.info(f"Found {len(commit_secrets)} additional secrets in commit history")
+        msg_secrets_count = sum(1 for s in commit_secrets if s.source == 'commit_message')
+        diff_secrets_count = sum(1 for s in commit_secrets if s.source != 'commit_message')
+        if msg_secrets_count:
+            logger.info(f"Found {msg_secrets_count} unique secret(s) in commit messages")
+        logger.info(f"Found {diff_secrets_count} unique secret(s) in commit diffs ({len(commit_secrets)} total deduplicated)")
     else:
         scan_stats['commits_scanned'] = 0
         # Original behavior: just get commit metadata
@@ -298,3 +318,25 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None,
         logger.warning("Neo4j credentials not found. Skipping graph creation. Using SQLite-only storage.")
     
     return graph, all_secrets, db_path if store_to_db else None, propagation_analysis, scan_stats
+
+
+def _get_diff_only_secrets(commit) -> set:
+    """Return secrets found in diff lines only (not in message)."""
+    from .detector import SECRET_REGEXES, shannon_entropy
+    if not commit.diff:
+        return set()
+    found = set()
+    for line in commit.diff.split('\n'):
+        if not line.startswith('+'):
+            continue
+        for regex in SECRET_REGEXES:
+            for match in regex.finditer(line):
+                if match.lastindex and match.lastindex >= 2:
+                    value = match.group(match.lastindex)
+                elif match.lastindex == 1:
+                    value = match.group(1)
+                else:
+                    value = match.group(0)
+                if shannon_entropy(value) > 3.5 or len(value) > 12:
+                    found.add(value)
+    return found
