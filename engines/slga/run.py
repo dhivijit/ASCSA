@@ -204,7 +204,8 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None,
 
     if enable_code_analysis:
         try:
-            from .code_parser import CodeParser
+            from .code_parser import CodeParser, _TS_AVAILABLE
+            logger.info(f"Code analysis engine: {'tree-sitter (AST)' if _TS_AVAILABLE else 'disabled (tree-sitter not installed)'}")
             parser = CodeParser()
             code_analysis = parser.parse_directory(repo_path)
             if code_analysis:
@@ -261,6 +262,7 @@ def run_slga(repo_path, ci_config_path=None, log_dir=None, artifact_dir=None,
     
     if neo4j_uri and neo4j_user and neo4j_pass:
         try:
+            logger.info(f"Connecting to Neo4j at {neo4j_uri} and building lineage graph...")
             graph = build_lineage_graph(
                 all_secrets, file_to_commits, neo4j_uri, neo4j_user, neo4j_pass,
                 stages=stages, logs=logs, artifacts=artifacts,

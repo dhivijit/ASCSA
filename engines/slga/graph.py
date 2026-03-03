@@ -1,5 +1,8 @@
 # SLGA graph logic
+import logging
 from neo4j import GraphDatabase
+
+logger = logging.getLogger(__name__)
 from .models import (
     Secret, Commit, Stage, Log, Artifact,
     CodeFunction, CodeClass, CodeImport, CallEdge,
@@ -7,8 +10,14 @@ from .models import (
 )
 
 class LineageGraph:
-    def __init__(self, uri, user, password):
-        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+    def __init__(self, uri, user, password, connection_timeout=10):
+        self.driver = GraphDatabase.driver(
+            uri, auth=(user, password),
+            connection_timeout=connection_timeout,
+            connection_acquisition_timeout=connection_timeout,
+        )
+        # Fail fast if Neo4j is unreachable rather than hanging silently
+        self.driver.verify_connectivity()
 
     def get_driver(self):
         """Expose the Neo4j driver for shared access by other components."""
@@ -88,51 +97,69 @@ class LineageGraph:
 
     def create_secret_nodes(self, secrets):
         with self.driver.session() as session:
-            for secret in secrets:
-                session.execute_write(self._create_secret_node, secret)
-
-    @staticmethod
-    def _create_secret_node(tx, secret: Secret):
-        tx.run(
-            """
-            MERGE (s:Secret {value: $value})
-            SET s.type = $type, s.entropy = $entropy
-            """,
-            value=secret.value, type=secret.secret_type, entropy=secret.entropy
-        )
-        for file, line in zip(secret.files, secret.lines):
-            tx.run(
-                """
-                MERGE (f:File {path: $file})
-                MERGE (s:Secret {value: $value})
-                MERGE (s)-[:APPEARS_IN {line: $line}]->(f)
-                """,
-                file=file, value=secret.value, line=line
+            session.execute_write(
+                lambda tx: tx.run(
+                    """
+                    UNWIND $rows AS row
+                    MERGE (s:Secret {value: row.value})
+                    SET s.type = row.type, s.entropy = row.entropy
+                    """,
+                    rows=[{'value': s.value, 'type': s.secret_type, 'entropy': s.entropy}
+                          for s in secrets],
+                )
             )
+            # File appearance links
+            rows = [
+                {'value': s.value, 'file': f, 'line': l}
+                for s in secrets
+                for f, l in zip(s.files, s.lines)
+            ]
+            if rows:
+                session.execute_write(
+                    lambda tx: tx.run(
+                        """
+                        UNWIND $rows AS row
+                        MERGE (f:File {path: row.file})
+                        MERGE (s:Secret {value: row.value})
+                        MERGE (s)-[:APPEARS_IN {line: row.line}]->(f)
+                        """,
+                        rows=rows,
+                    )
+                )
 
     def create_commit_nodes(self, commits):
+        if not commits:
+            return
         with self.driver.session() as session:
-            for commit in commits:
-                session.execute_write(self._create_commit_node, commit)
-
-    @staticmethod
-    def _create_commit_node(tx, commit: Commit):
-        tx.run(
-            """
-            MERGE (c:Commit {hash: $hash})
-            SET c.message = $message, c.author = $author, c.date = $date
-            """,
-            hash=commit.hash, message=commit.message, author=commit.author, date=commit.date
-        )
-        for file in commit.files:
-            tx.run(
-                """
-                MERGE (f:File {path: $file})
-                MERGE (c:Commit {hash: $hash})
-                MERGE (f)-[:IN_COMMIT]->(c)
-                """,
-                file=file, hash=commit.hash
+            session.execute_write(
+                lambda tx: tx.run(
+                    """
+                    UNWIND $rows AS row
+                    MERGE (c:Commit {hash: row.hash})
+                    SET c.message = row.message, c.author = row.author, c.date = row.date
+                    """,
+                    rows=[{'hash': c.hash, 'message': c.message,
+                           'author': c.author, 'date': c.date}
+                          for c in commits],
+                )
             )
+            file_rows = [
+                {'file': f, 'hash': c.hash}
+                for c in commits
+                for f in c.files
+            ]
+            if file_rows:
+                session.execute_write(
+                    lambda tx: tx.run(
+                        """
+                        UNWIND $rows AS row
+                        MERGE (f:File {path: row.file})
+                        MERGE (c:Commit {hash: row.hash})
+                        MERGE (f)-[:IN_COMMIT]->(c)
+                        """,
+                        rows=file_rows,
+                    )
+                )
 
     def query_secret_propagation(self, secret_value):
         """Query propagation paths for a secret (up to 3 hops)"""
@@ -341,47 +368,69 @@ class LineageGraph:
     # Code Symbol Analysis — Neo4j node & relationship creation
     # ------------------------------------------------------------------
 
+    def ensure_indexes(self):
+        """Create indexes needed for fast MERGE/MATCH lookups."""
+        with self.driver.session() as session:
+            for stmt in [
+                "CREATE INDEX code_function_name IF NOT EXISTS FOR (n:CodeFunction) ON (n.name)",
+                "CREATE INDEX file_path IF NOT EXISTS FOR (n:File) ON (n.path)",
+                "CREATE INDEX secret_value IF NOT EXISTS FOR (n:Secret) ON (n.value)",
+                "CREATE INDEX commit_hash IF NOT EXISTS FOR (n:Commit) ON (n.hash)",
+            ]:
+                session.run(stmt)
+        logger.info("Neo4j: indexes ensured")
+
+    _BATCH_SIZE = 500
+
     def create_code_function_nodes(self, functions):
         """Create CodeFunction nodes linked to their File via DEFINED_IN."""
+        total = len(functions)
+        logger.info(f"Neo4j: writing {total} code function nodes (batched)...")
         with self.driver.session() as session:
-            for func in functions:
-                session.execute_write(self._create_code_function_node, func)
-
-    @staticmethod
-    def _create_code_function_node(tx, func: CodeFunction):
-        tx.run(
-            """
-            MERGE (fn:CodeFunction {name: $name, file_path: $file_path, line_start: $line_start})
-            SET fn.line_end = $line_end,
-                fn.params = $params,
-                fn.is_method = $is_method,
-                fn.parent_class = $parent_class,
-                fn.return_type = $return_type
-            MERGE (f:File {path: $file_path})
-            MERGE (fn)-[:DEFINED_IN]->(f)
-            """,
-            name=func.name,
-            file_path=func.file_path,
-            line_start=func.line_start,
-            line_end=func.line_end,
-            params=func.params,
-            is_method=func.is_method,
-            parent_class=func.parent_class or "",
-            return_type=func.return_type or "",
-        )
-        # Link method to parent class if applicable
-        if func.parent_class:
-            tx.run(
-                """
-                MATCH (fn:CodeFunction {name: $name, file_path: $file_path, line_start: $line_start})
-                MERGE (cls:CodeClass {name: $parent_class, file_path: $file_path})
-                MERGE (fn)-[:METHOD_OF]->(cls)
-                """,
-                name=func.name,
-                file_path=func.file_path,
-                line_start=func.line_start,
-                parent_class=func.parent_class,
-            )
+            for start in range(0, total, self._BATCH_SIZE):
+                batch = functions[start:start + self._BATCH_SIZE]
+                rows = [
+                    {'name': f.name, 'file_path': f.file_path,
+                     'line_start': f.line_start, 'line_end': f.line_end,
+                     'params': f.params, 'is_method': f.is_method,
+                     'parent_class': f.parent_class or '',
+                     'return_type': f.return_type or ''}
+                    for f in batch
+                ]
+                session.execute_write(
+                    lambda tx, r=rows: tx.run(
+                        """
+                        UNWIND $rows AS row
+                        MERGE (fn:CodeFunction {name: row.name, file_path: row.file_path,
+                                                line_start: row.line_start})
+                        SET fn.line_end = row.line_end,
+                            fn.params = row.params,
+                            fn.is_method = row.is_method,
+                            fn.parent_class = row.parent_class,
+                            fn.return_type = row.return_type
+                        MERGE (f:File {path: row.file_path})
+                        MERGE (fn)-[:DEFINED_IN]->(f)
+                        """,
+                        rows=r,
+                    )
+                )
+                # Method → class links for methods that have a parent
+                method_rows = [r for r in rows if r['parent_class']]
+                if method_rows:
+                    session.execute_write(
+                        lambda tx, mr=method_rows: tx.run(
+                            """
+                            UNWIND $rows AS row
+                            MATCH (fn:CodeFunction {name: row.name, file_path: row.file_path,
+                                                    line_start: row.line_start})
+                            MERGE (cls:CodeClass {name: row.parent_class,
+                                                  file_path: row.file_path})
+                            MERGE (fn)-[:METHOD_OF]->(cls)
+                            """,
+                            rows=mr,
+                        )
+                    )
+                logger.info(f"Neo4j: code functions {min(start + self._BATCH_SIZE, total)}/{total}")
 
     def create_code_class_nodes(self, classes):
         """Create CodeClass nodes linked to their File via DEFINED_IN."""
@@ -423,49 +472,59 @@ class LineageGraph:
 
     def create_code_import_nodes(self, imports):
         """Create CodeImport nodes linked to their File via IMPORTS_FROM."""
+        total = len(imports)
+        logger.info(f"Neo4j: writing {total} import nodes (batched)...")
         with self.driver.session() as session:
-            for imp in imports:
-                session.execute_write(self._create_code_import_node, imp)
-
-    @staticmethod
-    def _create_code_import_node(tx, imp: CodeImport):
-        tx.run(
-            """
-            MERGE (i:CodeImport {module: $module, file_path: $file_path, line: $line})
-            SET i.names = $names,
-                i.alias = $alias
-            MERGE (f:File {path: $file_path})
-            MERGE (i)-[:IMPORTS_FROM]->(f)
-            """,
-            module=imp.module,
-            file_path=imp.file_path,
-            line=imp.line,
-            names=imp.names,
-            alias=imp.alias or "",
-        )
+            for start in range(0, total, self._BATCH_SIZE):
+                batch = imports[start:start + self._BATCH_SIZE]
+                rows = [
+                    {'module': i.module, 'file_path': i.file_path,
+                     'line': i.line, 'names': i.names, 'alias': i.alias or ''}
+                    for i in batch
+                ]
+                session.execute_write(
+                    lambda tx, r=rows: tx.run(
+                        """
+                        UNWIND $rows AS row
+                        MERGE (i:CodeImport {module: row.module, file_path: row.file_path,
+                                             line: row.line})
+                        SET i.names = row.names, i.alias = row.alias
+                        MERGE (f:File {path: row.file_path})
+                        MERGE (i)-[:IMPORTS_FROM]->(f)
+                        """,
+                        rows=r,
+                    )
+                )
+                logger.info(f"Neo4j: imports {min(start + self._BATCH_SIZE, total)}/{total}")
 
     def create_call_edges(self, edges):
         """Create CALLS relationships between CodeFunction nodes."""
+        total = len(edges)
+        logger.info(f"Neo4j: writing {total} call edges (batched)...")
         with self.driver.session() as session:
-            for edge in edges:
-                session.execute_write(self._create_call_edge, edge)
-
-    @staticmethod
-    def _create_call_edge(tx, edge: CallEdge):
-        tx.run(
-            """
-            MERGE (caller:CodeFunction {name: $caller})
-            MERGE (callee:CodeFunction {name: $callee})
-            MERGE (caller)-[:CALLS {file_path: $file_path, line: $line}]->(callee)
-            """,
-            caller=edge.caller,
-            callee=edge.callee,
-            file_path=edge.file_path,
-            line=edge.line,
-        )
+            for start in range(0, total, self._BATCH_SIZE):
+                batch = edges[start:start + self._BATCH_SIZE]
+                rows = [
+                    {'caller': e.caller, 'callee': e.callee,
+                     'file_path': e.file_path, 'line': e.line}
+                    for e in batch
+                ]
+                session.execute_write(
+                    lambda tx, r=rows: tx.run(
+                        """
+                        UNWIND $rows AS row
+                        MATCH (caller:CodeFunction {name: row.caller})
+                        MATCH (callee:CodeFunction {name: row.callee})
+                        MERGE (caller)-[:CALLS]->(callee)
+                        """,
+                        rows=r,
+                    )
+                )
+                logger.info(f"Neo4j: call edges {min(start + self._BATCH_SIZE, total)}/{total}")
 
     def create_contributor_nodes(self, contributors):
         """Create Contributor nodes linked to Files via AUTHORED_BY."""
+        logger.info(f"Neo4j: creating {len(contributors)} contributor nodes...")
         with self.driver.session() as session:
             for contrib in contributors:
                 session.execute_write(self._create_contributor_node, contrib)
@@ -626,6 +685,7 @@ def build_lineage_graph(secrets, file_to_commits, neo4j_uri, neo4j_user, neo4j_p
         if all_imports:
             graph.create_code_import_nodes(all_imports)
         if all_call_edges:
+            graph.ensure_indexes()  # must exist before MATCH lookups in call edges
             graph.create_call_edges(all_call_edges)
 
     # Git contributor nodes
