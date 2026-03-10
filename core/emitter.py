@@ -222,3 +222,6 @@ def setup_logging(verbose: bool = False):
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     logging.getLogger('neo4j').setLevel(logging.WARNING)
     logging.getLogger('git').setLevel(logging.WARNING)
+    logging.getLogger('boto3').setLevel(logging.WARNING)
+    logging.getLogger('botocore').setLevel(logging.WARNING)
+    logging.getLogger('s3transfer').setLevel(logging.WARNING)

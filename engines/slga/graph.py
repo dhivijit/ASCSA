@@ -18,6 +18,27 @@ class LineageGraph:
         )
         # Fail fast if Neo4j is unreachable rather than hanging silently
         self.driver.verify_connectivity()
+        # Counters populated by _refresh_counts() after all writes complete.
+        self.node_count = 0
+        self.edge_count = 0
+
+    def _refresh_counts(self):
+        """Query Neo4j for actual node and relationship counts after writes.
+
+        Called once at the end of build_lineage_graph() so that the orchestrator
+        sees correct values from getattr(graph, 'node_count', 0).
+        """
+        try:
+            with self.driver.session() as session:
+                n = session.run("MATCH (n) RETURN count(n) AS cnt").single()
+                r = session.run("MATCH ()-[rel]->() RETURN count(rel) AS cnt").single()
+                self.node_count = n["cnt"] if n else 0
+                self.edge_count = r["cnt"] if r else 0
+            logger.info(
+                f"Neo4j graph summary: {self.node_count} nodes, {self.edge_count} relationships"
+            )
+        except Exception as exc:
+            logger.warning(f"Neo4j count refresh failed (non-fatal): {exc}")
 
     def get_driver(self):
         """Expose the Neo4j driver for shared access by other components."""
@@ -693,5 +714,8 @@ def build_lineage_graph(secrets, file_to_commits, neo4j_uri, neo4j_user, neo4j_p
         contributors = git_context.get("contributors", [])
         if contributors:
             graph.create_contributor_nodes(contributors)
+
+    # Populate node_count / edge_count so the orchestrator reports real numbers.
+    graph._refresh_counts()
 
     return graph

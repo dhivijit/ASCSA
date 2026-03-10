@@ -164,12 +164,25 @@ class HCRSScanner:
             'build', 'dist', '.next', '.nuxt',
             'coverage', '.coverage', 'htmlcov'
         }
-        
+
+        # ASCSA-generated output files — skip to avoid false positives from
+        # violation snippets embedded in our own reports
+        skip_files = {
+            'hcrs.txt', 'hcrs.json',
+            'slga.txt', 'slga.json', 'slga_propagation_analysis.json',
+            'sdda.txt', 'sdda_stats.json',
+            'csce.txt', 'csce.json',
+            'ascsa_report.json',
+            'slga.db', 'sdda.db',
+        }
+
         for root, dirs, filenames in os.walk(repo_path):
             # Remove skip directories from traversal
             dirs[:] = [d for d in dirs if d not in skip_dirs]
-            
+
             for filename in filenames:
+                if filename in skip_files:
+                    continue
                 file_path = os.path.join(root, filename)
                 should_scan, language = should_analyze_file(file_path, self.config)
                 

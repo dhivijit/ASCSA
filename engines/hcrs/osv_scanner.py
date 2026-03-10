@@ -14,6 +14,7 @@ import os
 import requests
 import re
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # HTTP timeout for OSV API requests (seconds)
 _OSV_TIMEOUT = 30
@@ -212,12 +213,14 @@ def scan_dep_vulns(content, filename):
 
     packages = parser(content)
 
-    # Query OSV for each extracted package
+    # Query OSV for all packages in parallel
     all_vulns = []
-    for pkg in packages:
-        vulns = _get_vulns_for_package(pkg)
-        if vulns:
-            all_vulns.extend(vulns)
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(_get_vulns_for_package, pkg): pkg for pkg in packages}
+        for future in as_completed(futures):
+            vulns = future.result()
+            if vulns:
+                all_vulns.extend(vulns)
 
     if all_vulns:
         print(f"Found {len(all_vulns)} vulnerabilities in {filename}.")

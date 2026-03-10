@@ -66,67 +66,84 @@ def run_sdda(pipeline_run: PipelineRun,
     baseline_manager = BaselineManager(db, config)
     drift_detector = DriftDetector(baseline_manager, config)
 
-    db.store_pipeline_run(pipeline_run)
+    try:
+        db.store_pipeline_run(pipeline_run)
 
-    for usage in secret_usages:
-        db.store_secret_usage(usage)
+        for usage in secret_usages:
+            db.store_secret_usage(usage)
 
-    total_secrets = len(set(usage.secret_id for usage in secret_usages))
+        total_secrets = len(set(usage.secret_id for usage in secret_usages))
 
-    # Handle the "no secrets to analyze" case explicitly
-    if total_secrets == 0:
+        # Handle the "no secrets to analyze" case explicitly
+        if total_secrets == 0:
+            report = DriftReport(
+                run_id=pipeline_run.run_id,
+                timestamp=pipeline_run.timestamp,
+                total_secrets_analyzed=0,
+                drifted_secrets=[],
+                summary={'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0},
+                baseline_status="NO_SECRETS_DETECTED"
+            )
+            if store_report:
+                db.store_drift_report(report)
+            return report
+
+        # Detect drift for all secrets in this run
+        drift_detections = drift_detector.detect_drift_batch(secret_usages)
+
+        severity_counts = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
+        for detection in drift_detections:
+            severity_counts[detection.severity] = severity_counts.get(detection.severity, 0) + 1
+
+        # Determine baseline status
+        baselines_available = sum(
+            1 for usage in secret_usages
+            if db.get_baseline(usage.secret_id) is not None
+        )
+
+        if baselines_available == 0:
+            # Show progress: how far along is the secret with the most history?
+            min_samples = config.get('min_samples', 20)
+            window_days = config.get('baseline_window_days', 30)
+            max_collected = max(
+                (len(db.get_historical_usage(u.secret_id, window_days)) for u in secret_usages),
+                default=0
+            )
+            still_needed = max(0, min_samples - max_collected)
+            if still_needed > 0:
+                baseline_status = (
+                    f"ACCUMULATING_BASELINES ({max_collected}/{min_samples} runs collected"
+                    f" — {still_needed} more needed before drift detection activates)"
+                )
+            else:
+                baseline_status = (
+                    f"NO_BASELINES (0/{total_secrets} secrets have baselines"
+                    f" — enough data exists but baseline build failed)"
+                )
+        elif baselines_available < total_secrets * 0.5:
+            baseline_status = f"INSUFFICIENT_DATA ({baselines_available}/{total_secrets} baselines)"
+        else:
+            drifted_count = sum(1 for d in drift_detections if d.is_drifted)
+            if drifted_count == 0:
+                baseline_status = f"OK ({total_secrets} secrets analyzed, no drift detected)"
+            else:
+                baseline_status = f"DRIFT_DETECTED ({drifted_count}/{total_secrets} secrets drifted)"
+
         report = DriftReport(
             run_id=pipeline_run.run_id,
             timestamp=pipeline_run.timestamp,
-            total_secrets_analyzed=0,
-            drifted_secrets=[],
-            summary={'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0},
-            baseline_status="NO_SECRETS_DETECTED"
+            total_secrets_analyzed=total_secrets,
+            drifted_secrets=drift_detections,
+            summary=severity_counts,
+            baseline_status=baseline_status
         )
+
         if store_report:
             db.store_drift_report(report)
-        db.close()
+
         return report
-
-    # Detect drift for all secrets in this run
-    drift_detections = drift_detector.detect_drift_batch(secret_usages)
-
-    severity_counts = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
-    for detection in drift_detections:
-        severity_counts[detection.severity] = severity_counts.get(detection.severity, 0) + 1
-
-    # Determine baseline status
-    baselines_available = sum(
-        1 for usage in secret_usages
-        if db.get_baseline(usage.secret_id) is not None
-    )
-
-    if baselines_available == 0:
-        baseline_status = f"NO_BASELINES (0/{total_secrets} secrets have baselines — first run?)"
-    elif baselines_available < total_secrets * 0.5:
-        baseline_status = f"INSUFFICIENT_DATA ({baselines_available}/{total_secrets} baselines)"
-    else:
-        drifted_count = sum(1 for d in drift_detections if d.is_drifted)
-        if drifted_count == 0:
-            baseline_status = f"OK ({total_secrets} secrets analyzed, no drift detected)"
-        else:
-            baseline_status = f"DRIFT_DETECTED ({drifted_count}/{total_secrets} secrets drifted)"
-
-    report = DriftReport(
-        run_id=pipeline_run.run_id,
-        timestamp=pipeline_run.timestamp,
-        total_secrets_analyzed=total_secrets,
-        drifted_secrets=drift_detections,
-        summary=severity_counts,
-        baseline_status=baseline_status
-    )
-
-    if store_report:
-        db.store_drift_report(report)
-
-    db.close()
-
-    return report
+    finally:
+        db.close()
 
 def run_sdda_git_diff(
     current_secrets,

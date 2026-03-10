@@ -1,5 +1,6 @@
 # SDDA security module
 import os
+import hmac as _hmac
 import hashlib
 import re
 from typing import Optional
@@ -28,10 +29,11 @@ class SecretEncryption:
             else:
                 self._password = None
 
-        # When no password is provided, use a single random Fernet key
-        # (no PBKDF2 needed — the key itself is cryptographically random).
+        # When no password is provided, encryption is session-only and
+        # cross-connection lookups will break.  Store _static_key=None so
+        # hash_for_lookup() falls back to an empty key (still deterministic).
         if self._password is None:
-            self._static_key = Fernet.generate_key()
+            self._static_key = None
         else:
             self._static_key = None
 
@@ -81,6 +83,22 @@ class SecretEncryption:
             cipher = Fernet(self._static_key)
             return cipher.decrypt(raw).decode()
     
+    def hash_for_lookup(self, plaintext: str) -> str:
+        """Deterministic keyed hash for use as a SQL lookup key.
+
+        Unlike encrypt(), this always produces the same output for the same
+        input, making it safe to use in WHERE clauses across DB connections.
+        """
+        if not plaintext:
+            return ""
+        key: bytes
+        if self._password is not None:
+            key = self._password.encode()
+        else:
+            # No persistent key: use a zero key (deterministic but unkeyed)
+            key = b"sdda-default"
+        return _hmac.new(key, plaintext.encode(), hashlib.sha256).hexdigest()
+
     def mask_secret(self, secret: str, show_chars: int = 4) -> str:
         """Mask a secret for safe display"""
         if not secret or len(secret) <= show_chars:
@@ -228,7 +246,12 @@ class SecurityConfig:
     """Security configuration management"""
     
     def __init__(self):
-        self.encryption_enabled = os.environ.get('SDDA_ENCRYPTION_ENABLED', 'true').lower() == 'true'
+        # Encryption is only meaningful when a persistent key is available;
+        # without one every SDDADatabase connection generates a new random key,
+        # making cross-connection lookups impossible.
+        key_present = bool(os.environ.get('SDDA_ENCRYPTION_KEY'))
+        enc_flag = os.environ.get('SDDA_ENCRYPTION_ENABLED', '').lower()
+        self.encryption_enabled = key_present or (enc_flag == 'true')
         self.validation_enabled = os.environ.get('SDDA_VALIDATION_ENABLED', 'true').lower() == 'true'
         self.audit_enabled = os.environ.get('SDDA_AUDIT_ENABLED', 'true').lower() == 'true'
         self.mask_secrets_in_logs = os.environ.get('SDDA_MASK_SECRETS', 'true').lower() == 'true'

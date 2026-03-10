@@ -120,6 +120,13 @@ class PipelineOrchestrator:
         # Phase 5: Correlation & Risk Assessment (Legacy)
         self._correlate_results(slga_result, sdda_result, hcrs_result)
 
+        # Close Neo4j driver now that all engines have finished with it
+        if slga_result and getattr(slga_result, 'graph', None):
+            try:
+                slga_result.graph.close()
+            except Exception:
+                pass
+
         # Phase 6: Generate Recommendations
         self._generate_recommendations()
 
@@ -349,16 +356,26 @@ class PipelineOrchestrator:
             if hasattr(slga_result, 'secrets'):
                 import hashlib
                 for secret in slga_result.secrets:
-                    # Hash the secret value to create a valid secret_id
-                    # that conforms to InputValidator.SECRET_ID_PATTERN: ^[a-zA-Z0-9_\-\.]{1,255}$
+                    # Hash the secret value to create a stable, validator-safe secret_id
                     secret_hash = hashlib.sha256(secret.value.encode()).hexdigest()[:16]
                     secret_id = f"secret_{secret_hash}"
-                    
+
+                    # Derive stages from the secret's pipeline stage metadata when available;
+                    # fall back to an empty set so SDDA still records the run.
+                    raw_stages = getattr(secret, 'stages', None) or getattr(secret, 'pipeline_stages', None)
+                    if raw_stages:
+                        stages = {str(s) for s in raw_stages}
+                    elif secret.files:
+                        # Infer a minimal stage from file presence so stage-drift can fire
+                        stages = {'build'}
+                    else:
+                        stages = set()
+
                     usage = SecretUsage(
                         secret_id=secret_id,
                         run_id=self.context.run_id,
                         timestamp=self.context.timestamp,
-                        stages=set(),
+                        stages=stages,
                         access_count=len(secret.files),
                         actor=self.context.actor,
                         environment=self.context.environment,

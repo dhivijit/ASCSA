@@ -33,6 +33,15 @@ class CSCEReporter:
         lines.append(f"  HCRS violations received: {isum.get('hcrs_violations', 0)}")
         lines.append(f"  SDDA drift detections received: {isum.get('sdda_drifts', 0)}")
         lines.append(f"  SLGA secrets received: {isum.get('slga_secrets', 0)}")
+        raw_spatial = isum.get('raw_spatial_pairs', 0)
+        grouped_spatial = isum.get('grouped_spatial_findings', 0)
+        if raw_spatial > 0 and raw_spatial != grouped_spatial:
+            lines.append(
+                f"  Spatial correlations: {raw_spatial} raw line-pairs "
+                f"\u2192 {grouped_spatial} grouped findings "
+                f"(deduplicated by file + violation-type; "
+                f"{raw_spatial - grouped_spatial} redundant pairs removed)"
+            )
         lines.append("")
 
         # Summary

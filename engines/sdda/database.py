@@ -190,10 +190,11 @@ class SDDADatabase:
                 self.audit_logger.log_validation_failure('run_id', usage.run_id, 'Invalid format')
                 raise ValueError(f"Invalid run_id format: {usage.run_id}")
         
-        # Encrypt secret_id if enabled
+        # Hash secret_id for deterministic lookup (encrypt() uses a random IV
+        # and cannot be used in WHERE clauses across connections)
         secret_id_to_store = usage.secret_id
         if self.encryptor and self.security_config.encryption_enabled:
-            secret_id_to_store = self.encryptor.encrypt(usage.secret_id)
+            secret_id_to_store = self.encryptor.hash_for_lookup(usage.secret_id)
         
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -218,10 +219,10 @@ class SDDADatabase:
     
     def get_historical_usage(self, secret_id: str, window_days: int) -> List[SecretUsage]:
         """Get historical usage for a secret within a time window"""
-        # Encrypt secret_id for lookup if encryption is enabled
+        # Use the same deterministic hash that was used during storage
         secret_id_lookup = secret_id
         if self.encryptor and self.security_config.encryption_enabled:
-            secret_id_lookup = self.encryptor.encrypt(secret_id)
+            secret_id_lookup = self.encryptor.hash_for_lookup(secret_id)
         
         cursor = self.conn.cursor()
         # Add a small buffer to be inclusive of boundary cases
@@ -235,13 +236,9 @@ class SDDADatabase:
         
         usages = []
         for row in cursor.fetchall():
-            # Decrypt secret_id if encryption is enabled
-            retrieved_secret_id = row['secret_id']
-            if self.encryptor and self.security_config.encryption_enabled:
-                retrieved_secret_id = self.encryptor.decrypt(retrieved_secret_id)
-            
+            # secret_id was stored as a hash; use the caller-supplied plaintext
             usages.append(SecretUsage(
-                secret_id=retrieved_secret_id,
+                secret_id=secret_id,
                 run_id=row['run_id'],
                 timestamp=datetime.fromisoformat(row['timestamp']),
                 stages=set(json.loads(row['stages'])),
@@ -258,10 +255,10 @@ class SDDADatabase:
     
     def store_baseline(self, baseline: Baseline):
         """Store or update baseline"""
-        # Encrypt secret_id if enabled
+        # Hash secret_id for deterministic lookup
         secret_id_to_store = baseline.secret_id
         if self.encryptor and self.security_config.encryption_enabled:
-            secret_id_to_store = self.encryptor.encrypt(baseline.secret_id)
+            secret_id_to_store = self.encryptor.hash_for_lookup(baseline.secret_id)
         
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -299,10 +296,10 @@ class SDDADatabase:
     
     def get_baseline(self, secret_id: str) -> Optional[Baseline]:
         """Retrieve baseline for a secret"""
-        # Encrypt secret_id for lookup if encryption is enabled
+        # Use the same deterministic hash that was used during storage
         secret_id_lookup = secret_id
         if self.encryptor and self.security_config.encryption_enabled:
-            secret_id_lookup = self.encryptor.encrypt(secret_id)
+            secret_id_lookup = self.encryptor.hash_for_lookup(secret_id)
         
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM baselines WHERE secret_id = ?", (secret_id_lookup,))
@@ -311,13 +308,9 @@ class SDDADatabase:
         if not row:
             return None
         
-        # Decrypt secret_id if encryption is enabled
-        retrieved_secret_id = row['secret_id']
-        if self.encryptor and self.security_config.encryption_enabled:
-            retrieved_secret_id = self.encryptor.decrypt(retrieved_secret_id)
-        
+        # secret_id was stored as a hash; use the caller-supplied plaintext
         return Baseline(
-            secret_id=retrieved_secret_id,
+            secret_id=secret_id,
             window_days=row['window_days'],
             normal_stages=set(json.loads(row['normal_stages'])),
             stage_mean=row['stage_mean'],
@@ -339,17 +332,30 @@ class SDDADatabase:
         )
     
     def get_all_secret_ids(self) -> List[str]:
-        """Get all unique secret IDs from usage history"""
+        """Get all unique secret IDs from usage history.
+
+        When encryption is disabled, reads plaintext IDs directly from
+        secret_usage.  When encryption is enabled the stored values are
+        HMAC hashes and cannot be reversed, so we fall back to the
+        pipeline_runs.secrets_used JSON column, which is never encrypted.
+        """
+        if self.encryptor and self.security_config.encryption_enabled:
+            # secrets_used stores plaintext IDs (they are path/name identifiers,
+            # not secret values, and are not encrypted by design)
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT DISTINCT secrets_used FROM pipeline_runs WHERE secrets_used IS NOT NULL")
+            seen: set = set()
+            for row in cursor.fetchall():
+                try:
+                    for sid in json.loads(row['secrets_used']):
+                        seen.add(sid)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            return list(seen)
+
         cursor = self.conn.cursor()
         cursor.execute("SELECT DISTINCT secret_id FROM secret_usage")
-        secret_ids = []
-        for row in cursor.fetchall():
-            secret_id = row['secret_id']
-            # Decrypt if encryption is enabled
-            if self.encryptor and self.security_config.encryption_enabled:
-                secret_id = self.encryptor.decrypt(secret_id)
-            secret_ids.append(secret_id)
-        return secret_ids
+        return [row['secret_id'] for row in cursor.fetchall()]
     
     def store_drift_report(self, drift_report) -> int:
         """
@@ -388,10 +394,10 @@ class SDDADatabase:
         
         # Store individual detections
         for detection in drift_report.drifted_secrets:
-            # Encrypt secret_id if encryption is enabled
+            # Hash secret_id for deterministic lookup
             secret_id_to_store = detection.secret_id
             if self.encryptor and self.security_config.encryption_enabled:
-                secret_id_to_store = self.encryptor.encrypt(detection.secret_id)
+                secret_id_to_store = self.encryptor.hash_for_lookup(detection.secret_id)
             
             cursor.execute("""
                 INSERT INTO drift_detections 
@@ -445,13 +451,8 @@ class SDDADatabase:
         
         detections = []
         for row in cursor.fetchall():
-            # Decrypt secret_id if encryption is enabled
-            secret_id = row['secret_id']
-            if self.encryptor and self.security_config.encryption_enabled:
-                secret_id = self.encryptor.decrypt(secret_id)
-            
             detections.append({
-                'secret_id': secret_id,
+                'secret_id': row['secret_id'],
                 'run_id': row['run_id'],
                 'timestamp': row['timestamp'],
                 'severity': row['severity'],
@@ -495,10 +496,10 @@ class SDDADatabase:
         cursor = self.conn.cursor()
         
         if secret_id:
-            # Encrypt for lookup if needed
+            # Use deterministic hash for lookup
             secret_id_lookup = secret_id
             if self.encryptor and self.security_config.encryption_enabled:
-                secret_id_lookup = self.encryptor.encrypt(secret_id)
+                secret_id_lookup = self.encryptor.hash_for_lookup(secret_id)
             
             cursor.execute("""
                 SELECT DISTINCT dr.*

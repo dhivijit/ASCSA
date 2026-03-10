@@ -17,6 +17,7 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
 
+from typing import Tuple
 from .models import Correlation, CorrelationReport, CorrelationType, CorrelationSeverity
 from engines.hcrs.models import SecurityViolation, Severity as HCRSSeverity
 from engines.sdda.models import DriftReport, DriftDetection
@@ -32,6 +33,7 @@ class CorrelationEngine:
     def __init__(self):
         self.correlations = []
         self._input_counts = {'hcrs_violations': 0, 'sdda_drifts': 0, 'slga_secrets': 0}
+        self._raw_spatial_count = 0  # set by _deduplicate_spatial()
     
     def correlate(
         self, 
@@ -85,8 +87,12 @@ class CorrelationEngine:
         if slga_secrets:
             self._correlate_code_structure(hcrs_violations, slga_secrets)
         
+        # Deduplicate spatial correlations that share the same (file, violation_type)
+        # root cause — prevents cross-product inflation when a file has many secrets.
+        self._deduplicate_spatial()
+
         logger.info(f"CSCE analysis complete: {len(self.correlations)} correlations found")
-        
+
         # Generate report
         return self._generate_report()
     
@@ -400,6 +406,78 @@ class CorrelationEngine:
                 self.correlations.append(correlation)
                 logger.debug(f"Found CODE_STRUCTURE correlation in {file_path}")
 
+    def _deduplicate_spatial(self) -> None:
+        """Collapse spatial correlations sharing a (file, violation_type) root cause.
+
+        The raw pre-dedup count is preserved in self._raw_spatial_count so the
+        report can show both numbers.  Other correlation types are not touched —
+        they are qualitatively distinct and low-volume.
+        """
+        severity_rank = {'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1}
+
+        spatial = [
+            c for c in self.correlations
+            if c.correlation_type == CorrelationType.SPATIAL
+        ]
+        other = [
+            c for c in self.correlations
+            if c.correlation_type != CorrelationType.SPATIAL
+        ]
+
+        self._raw_spatial_count = len(spatial)
+
+        # Group by (file_path, violation_type)
+        groups: Dict[Tuple[str, str], List[Correlation]] = {}
+        for corr in spatial:
+            key = (
+                corr.evidence.get('file', ''),
+                corr.evidence.get('violation_type', ''),
+            )
+            groups.setdefault(key, []).append(corr)
+
+        deduplicated: List[Correlation] = []
+        for (file_path, vtype), group in groups.items():
+            # Representative = highest severity + highest confidence
+            rep = max(
+                group,
+                key=lambda c: (
+                    severity_rank.get(c.severity.value, 0),
+                    c.confidence,
+                ),
+            )
+            # Merge all unique violation and secret IDs from the group
+            merged_violation_ids = list({
+                vid for c in group for vid in c.hcrs_violation_ids
+            })
+            merged_secret_ids = list({
+                sid for c in group for sid in c.slga_secret_ids
+            })
+            grouped = Correlation(
+                correlation_id=rep.correlation_id,
+                correlation_type=rep.correlation_type,
+                severity=rep.severity,
+                confidence=rep.confidence,
+                hcrs_violation_ids=merged_violation_ids,
+                slga_secret_ids=merged_secret_ids,
+                sdda_drift_ids=rep.sdda_drift_ids,
+                description=rep.description,
+                evidence={
+                    **rep.evidence,
+                    'grouped_violation_count': len(group),
+                    'raw_line_pair_count': len(group),
+                },
+                recommendation=rep.recommendation,
+                timestamp=rep.timestamp,
+            )
+            deduplicated.append(grouped)
+
+        self.correlations = deduplicated + other
+        logger.info(
+            f"CSCE spatial dedup: {self._raw_spatial_count} raw spatial pairs "
+            f"→ {len(deduplicated)} compound findings "
+            f"(grouped by file + violation_type)"
+        )
+
     def _calculate_severity(self, severity1: str, severity2: str) -> CorrelationSeverity:
         """Calculate combined severity from two sources"""
         severity_levels = {'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1, 'INFO': 0}
@@ -450,6 +528,14 @@ class CorrelationEngine:
             )
         )[:10]
         
+        input_summary = dict(self._input_counts)
+        # Expose raw-vs-grouped spatial counts so reports are transparent.
+        input_summary['raw_spatial_pairs'] = self._raw_spatial_count
+        input_summary['grouped_spatial_findings'] = sum(
+            1 for c in self.correlations
+            if c.correlation_type == CorrelationType.SPATIAL
+        )
+
         return CorrelationReport(
             timestamp=datetime.now(),
             total_correlations=len(self.correlations),
@@ -461,7 +547,7 @@ class CorrelationEngine:
             avg_confidence=total_confidence / len(self.correlations) if self.correlations else 0,
             high_confidence_count=len(high_confidence),
             top_priorities=top_priorities,
-            input_summary=dict(self._input_counts),
+            input_summary=input_summary,
         )
 
 
